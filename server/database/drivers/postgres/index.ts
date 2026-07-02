@@ -3,6 +3,7 @@ import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle } from './connection'
 import { listSchemas, listTables, describeTable } from './schema'
 import { executeUnsafe, browseTable, type CancellableQuery } from './query'
+import { cancelQuery, streamTable } from './stream'
 
 export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
   let handle: PostgresHandle | null = null
@@ -51,9 +52,12 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
       return browseTable(handle.sql, schema, table, opts, queryId, activeQueries, oidCache)
     },
 
-    // implemented by later tasks
-    async cancel() { throw new Error('not implemented: cancel') },
-    // eslint-disable-next-line require-yield
-    async* stream() { throw new Error('not implemented: stream') },
+    async cancel(queryId: string) {
+      await cancelQuery(activeQueries, queryId)
+    },
+    async* stream(schema: string, table: string, opts: BrowseOpts, batchSize: number, queryId?: string) {
+      if (!handle) throw new Error('not connected')
+      yield* streamTable(handle.sql, schema, table, opts, batchSize, queryId, activeQueries)
+    },
   }
 }
