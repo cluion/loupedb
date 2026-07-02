@@ -1,0 +1,31 @@
+{
+  "name": "loupedb",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "nuxt typecheck",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "nuxt": "^4.4.8",
+    "postgres": "^3.4.9",
+    "vue": "^3.5.38"
+  },
+  "devDependencies": {
+    "@nuxt/test-utils": "^4.0.3",
+    "@testcontainers/postgresql": "^12.0.4",
+    "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^10.5.0",
+    "happy-dom": "^20.10.6",
+    "testcontainers": "^12.0.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
+    "vue-tsc": "^3.3.6"
+  }
+}
