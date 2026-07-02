@@ -1,6 +1,7 @@
 import type { ConnectionConfig, ConnectionStatus } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle } from './connection'
+import { listSchemas, listTables, describeTable } from './schema'
 
 export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
   let handle: PostgresHandle | null = null
@@ -25,10 +26,20 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
     },
     get status() { return status },
 
+    async listSchemas() {
+      if (!handle) throw new Error('not connected')
+      return listSchemas(handle.sql)
+    },
+    async listTables(schema: string) {
+      if (!handle) throw new Error('not connected')
+      return listTables(handle.sql, schema)
+    },
+    async describeTable(schema: string, table: string) {
+      if (!handle) throw new Error('not connected')
+      return describeTable(handle.sql, schema, table)
+    },
+
     // implemented by later tasks
-    async listSchemas() { throw new Error('not implemented: listSchemas') },
-    async listTables() { throw new Error('not implemented: listTables') },
-    async describeTable() { throw new Error('not implemented: describeTable') },
     async execute() { throw new Error('not implemented: execute') },
     async browse() { throw new Error('not implemented: browse') },
     async cancel() { throw new Error('not implemented: cancel') },
