@@ -61,10 +61,15 @@ export async function browseTable(
     where table_schema = ${schema} and table_name = ${table}`
   const validCols = new Set(colRows.map((r) => String(r.column_name)))
 
+  // ops are interpolated into SQL - runtime whitelist required because BrowseOpts
+  // arrives from API request bodies where TS types do not hold
+  const ALLOWED_OPS: ReadonlySet<string> = new Set(['=', '!=', '>', '<', 'like'])
+
   const where: string[] = []
   const params: unknown[] = []
   for (const f of opts.filter ?? []) {
     if (!validCols.has(f.column)) continue // whitelist: unknown columns dropped
+    if (!ALLOWED_OPS.has(f.op)) continue // whitelist: unknown operators dropped
     where.push(`${quoteIdent(f.column)} ${f.op} $${params.length + 1}`)
     params.push(f.value)
   }

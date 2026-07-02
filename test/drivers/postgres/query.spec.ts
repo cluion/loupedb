@@ -62,6 +62,16 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('browse ignores non-whitelisted filter operator (runtime injection guard)', async () => {
+    const driver = await setup()
+    const r = await driver.browse('public', 'items', {
+      limit: 10, offset: 0,
+      filter: [{ column: 'qty', op: '= 1 or 1=1 --' as never, value: 1 }],
+    })
+    expect(r.rows.length).toBe(3) // malicious op dropped, unfiltered result
+    await driver.disconnect()
+  })
+
   it('browse ignores non-whitelisted filter column', async () => {
     const driver = await setup()
     const r = await driver.browse('public', 'items', {
