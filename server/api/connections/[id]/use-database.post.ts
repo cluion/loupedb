@@ -15,7 +15,8 @@ export default defineEventHandler(async (event) => {
   }
   if (session.driver.config.database === database) return ok({ id })
   try {
-    const newId = await manager.open({ ...session.driver.config, database })
+    // parented: closing the root connection cascades to this sibling
+    const newId = await manager.open({ ...session.driver.config, database }, id)
     return ok({ id: newId })
   } catch (err) {
     return fail(toDatabaseError(err))

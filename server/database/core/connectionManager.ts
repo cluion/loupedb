@@ -11,10 +11,11 @@ export interface ConnectionManagerOptions {
 export interface DriverSession {
   readonly driver: DatabaseDriver
   readonly lastActiveAt: number
+  readonly parentId?: string
 }
 
 export interface ConnectionManager {
-  open(config: ConnectionConfig): Promise<string>
+  open(config: ConnectionConfig, parentId?: string): Promise<string>
   get(id: string): DriverSession | undefined
   close(id: string): Promise<void>
   closeAll(): Promise<void>
@@ -25,20 +26,33 @@ export function createConnectionManager(opts: ConnectionManagerOptions): Connect
   const sessions = new Map<string, DriverSession>()
 
   const touch = (id: string, s: DriverSession): DriverSession => {
-    const next: DriverSession = { driver: s.driver, lastActiveAt: Date.now() }
+    const next: DriverSession = { driver: s.driver, lastActiveAt: Date.now(), parentId: s.parentId }
     sessions.set(id, next)
     return next
   }
 
+  // closing a session pulls its sibling children down with it - the ui opens
+  // per-database child sessions that must not outlive their root connection
+  async function closeSession(id: string): Promise<void> {
+    const s = sessions.get(id)
+    if (!s) return
+    sessions.delete(id)
+    const children = [...sessions.entries()]
+      .filter(([, c]) => c.parentId === id)
+      .map(([cid]) => cid)
+    await Promise.all(children.map(closeSession))
+    await s.driver.disconnect()
+  }
+
   return {
-    async open(config) {
+    async open(config, parentId) {
       if (sessions.size >= opts.maxSessions) {
         throw new Error(`max sessions reached (${opts.maxSessions})`)
       }
       const driver = createDriver(config)
       await driver.connect()
       const id = randomUUID()
-      sessions.set(id, { driver, lastActiveAt: Date.now() })
+      sessions.set(id, { driver, lastActiveAt: Date.now(), parentId })
       return id
     },
     get(id) {
@@ -46,12 +60,7 @@ export function createConnectionManager(opts: ConnectionManagerOptions): Connect
       if (!s) return undefined
       return touch(id, s) // reading a session marks it active
     },
-    async close(id) {
-      const s = sessions.get(id)
-      if (!s) return
-      sessions.delete(id)
-      await s.driver.disconnect()
-    },
+    close: closeSession,
     async closeAll() {
       const all = [...sessions.values()]
       sessions.clear()

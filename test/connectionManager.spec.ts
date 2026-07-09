@@ -53,6 +53,29 @@ describe('ConnectionManager', () => {
     expect(mgr.get(id)).toBeUndefined()
   })
 
+  it('closing a parent cascades to its sibling child sessions', async () => {
+    handle = await startPgContainer()
+    const mgr = createConnectionManager({ maxSessions: 5, idleTimeoutMs: 60_000 })
+    const root = await mgr.open(cfg(handle.config))
+    const child = await mgr.open(cfg(handle.config), root)
+    const grandchild = await mgr.open(cfg(handle.config), child)
+    await mgr.close(root)
+    expect(mgr.get(root)).toBeUndefined()
+    expect(mgr.get(child)).toBeUndefined()
+    expect(mgr.get(grandchild)).toBeUndefined()
+  })
+
+  it('closing a child leaves the parent alive', async () => {
+    handle = await startPgContainer()
+    const mgr = createConnectionManager({ maxSessions: 5, idleTimeoutMs: 60_000 })
+    const root = await mgr.open(cfg(handle.config))
+    const child = await mgr.open(cfg(handle.config), root)
+    await mgr.close(child)
+    expect(mgr.get(child)).toBeUndefined()
+    expect(mgr.get(root)).toBeDefined()
+    await mgr.closeAll()
+  })
+
   it('get refreshes lastActiveAt so active sessions survive sweep', async () => {
     handle = await startPgContainer()
     const mgr = createConnectionManager({ maxSessions: 5, idleTimeoutMs: 200 })

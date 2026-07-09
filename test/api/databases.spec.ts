@@ -81,6 +81,26 @@ describe('multi-database API', async () => {
     if (r.ok) expect(r.data.id).toBe(connId)
   })
 
+  it('deleting the root connection cascades to its sibling sessions', async () => {
+    const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
+      method: 'POST',
+      body: {
+        name: 'cascade-t', driver: 'postgres', host: handle.config.host, port: handle.config.port,
+        database: handle.config.database, username: handle.config.username, password: handle.config.password,
+      },
+    })
+    if (!created.ok) throw new Error('setup failed')
+    const sibling = await $fetch<Envelope<{ id: string }>>(`/api/connections/${created.data.id}/use-database`, {
+      method: 'POST', body: { database: 'seconddb' },
+    })
+    if (!sibling.ok) throw new Error('sibling failed')
+
+    await $fetch(`/api/connections/${created.data.id}`, { method: 'DELETE' })
+    const after = await $fetch<Envelope<never>>(`/api/connections/${sibling.data.id}/schemas`)
+    expect(after.ok).toBe(false)
+    if (!after.ok) expect(after.error.code).toBe('NO_CONN')
+  })
+
   it('POST /use-database on unknown session returns NO_CONN', async () => {
     const r = await $fetch<Envelope<never>>(`/api/connections/nope/use-database`, {
       method: 'POST', body: { database: 'seconddb' },
