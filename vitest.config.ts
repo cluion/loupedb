@@ -1,19 +1,36 @@
 import { fileURLToPath } from 'node:url'
-import { defineVitestConfig } from '@nuxt/test-utils/config'
+import { defineConfig } from 'vitest/config'
+import { defineVitestProject } from '@nuxt/test-utils/config'
 
-// defineVitestConfig enables the optional 'nuxt' environment used by
-// component tests (opt-in per file via @vitest-environment nuxt docblock);
-// server tests keep the default node environment
-export default defineVitestConfig({
-  resolve: {
-    // maps Nuxt 4's built-in #shared alias so plain vitest (without Nuxt) can resolve it
-    alias: { '#shared': fileURLToPath(new URL('./shared', import.meta.url)) },
-  },
+// two isolated projects: plain node for server/api specs and a nuxt runtime
+// project for component/composable specs - mixing the nuxt vite plugins into
+// one global pipeline breaks the @nuxt/test-utils e2e build
+export default defineConfig({
   test: {
-    environment: 'node',
-    exclude: ['**/node_modules/**', 'test/e2e/**'], // e2e runs under playwright, not vitest
     coverage: { provider: 'v8', reporter: ['text', 'html'], thresholds: { lines: 80 } },
-    testTimeout: 60_000, // testcontainers needs a longer timeout
-    hookTimeout: 300_000, // @nuxt/test-utils setup() builds the app in beforeAll
+    projects: [
+      {
+        resolve: {
+          // maps Nuxt 4's built-in #shared alias for plain vitest
+          alias: { '#shared': fileURLToPath(new URL('./shared', import.meta.url)) },
+        },
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: ['test/**/*.spec.ts'],
+          exclude: ['**/node_modules/**', 'test/unit/**', 'test/e2e/**'],
+          testTimeout: 60_000, // testcontainers needs a longer timeout
+          hookTimeout: 300_000, // @nuxt/test-utils setup() builds the app in beforeAll
+        },
+      },
+      await defineVitestProject({
+        test: {
+          name: 'nuxt',
+          environment: 'nuxt',
+          include: ['test/unit/**/*.spec.ts'],
+          testTimeout: 60_000,
+        },
+      }),
+    ],
   },
 })
