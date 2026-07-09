@@ -48,4 +48,22 @@ describe('SchemaTree', () => {
     await w.find('button').trigger('click') // collapse
     expect(w.text()).not.toContain('users')
   })
+
+  it('an empty schema shows a placeholder instead of nothing', async () => {
+    tablesMock.mockResolvedValueOnce({ ok: true, data: [] } as never)
+    const w = await mountSuspended(SchemaTree, { props: { connectionId: 'c1' } })
+    await vi.waitFor(() => expect(w.text()).toContain('app'))
+    await w.find('button').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('沒有資料表'))
+  })
+
+  it('re-expanding refetches tables so new tables appear', async () => {
+    const w = await mountSuspended(SchemaTree, { props: { connectionId: 'c1' } })
+    await vi.waitFor(() => expect(w.text()).toContain('app'))
+    await w.find('button').trigger('click') // expand
+    await vi.waitFor(() => expect(tablesMock).toHaveBeenCalledTimes(1))
+    await w.find('button').trigger('click') // collapse
+    await w.find('button').trigger('click') // expand again
+    await vi.waitFor(() => expect(tablesMock).toHaveBeenCalledTimes(2))
+  })
 })

@@ -18,7 +18,8 @@ onMounted(async () => {
 
 async function toggle(schema: string) {
   expanded.value = expanded.value === schema ? null : schema
-  if (expanded.value && !tablesData.value[schema]) {
+  // refetch on every expand - tables created since the last look must show up
+  if (expanded.value) {
     const r = await tables(schema)
     if (r.ok) tablesData.value = { ...tablesData.value, [schema]: r.data }
     else error.value = r.error.message
@@ -35,6 +36,7 @@ async function toggle(schema: string) {
         <li v-for="t in tablesData[s.name] ?? []" :key="t.name">
           <button class="leaf" @click="emit('select-table', s.name, t.name)">{{ t.name }}</button>
         </li>
+        <li v-if="tablesData[s.name]?.length === 0" class="empty">（沒有資料表）</li>
       </ul>
     </div>
   </div>
@@ -61,4 +63,5 @@ async function toggle(schema: string) {
 .node { color: var(--muted); }
 .node:hover, .leaf:hover { background: var(--panel-2); border: none; }
 .leaf:hover { color: var(--brass); }
+.empty { color: var(--muted); padding: 4px 6px; font-style: italic; }
 </style>
