@@ -25,9 +25,23 @@ beforeEach(() => {
   useSession().setQueryResult(null)
 })
 
+// CodeMirror needs a real browser - unit tests drive the same v-model contract
+// through a textarea stand-in; the e2e test exercises the real editor
+const SqlCodeEditorStub = {
+  props: ['modelValue'],
+  emits: ['update:modelValue', 'run'],
+  template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
+}
+const mountOpts = { props: { connectionId: 'c1' }, global: { stubs: { SqlCodeEditor: SqlCodeEditorStub } } }
+
 describe('SqlEditor', () => {
+  it('renders the code editor bound via v-model', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    expect(w.findComponent(SqlCodeEditorStub).exists()).toBe(true)
+  })
+
   it('runs sql and stores result in session', async () => {
-    const w = await mountSuspended(SqlEditor, { props: { connectionId: 'c1' } })
+    const w = await mountSuspended(SqlEditor, mountOpts)
     await w.find('textarea').setValue('select 1 as one')
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
@@ -41,7 +55,7 @@ describe('SqlEditor', () => {
     executeMock.mockResolvedValueOnce({
       ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },
     } as never)
-    const w = await mountSuspended(SqlEditor, { props: { connectionId: 'c1' } })
+    const w = await mountSuspended(SqlEditor, mountOpts)
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(w.find('[role="alert"]').exists()).toBe(true))
     expect(w.find('[role="alert"]').text()).toContain('no such table')

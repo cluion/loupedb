@@ -30,6 +30,12 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await expect(page.getByRole('cell', { name: 'PK' })).toBeVisible()
   await expect(page.getByText('int4').first()).toBeVisible()
 
+  // the real codemirror editor accepts input and executes (Mod-Enter path is the same run())
+  await page.locator('.cm-content').click()
+  await page.locator('.cm-content').fill("select 'lens' as tag")
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'lens', exact: true })).toBeVisible()
+
   // header shows the connection name, and disconnect returns to the lens screen
   await expect(page.getByText('e2e', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '中斷連線' }).click()

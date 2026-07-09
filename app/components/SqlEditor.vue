@@ -19,10 +19,11 @@ async function run() {
 
 <template>
   <div class="editor">
-    <!-- plain textarea for mvp; CodeMirror/Monaco is a future upgrade -->
-    <textarea v-model="sql" rows="6" spellcheck="false" />
+    <SqlCodeEditor v-model="sql" @run="run" />
     <div class="actions">
-      <button class="primary" :disabled="running" @click="run">{{ running ? '執行中…' : '執行' }}</button>
+      <button class="primary" :disabled="running" title="⌘⏎ / Ctrl+Enter" @click="run">
+        {{ running ? '執行中…' : '執行' }}
+      </button>
       <span v-if="queryResult" class="meta">
         {{ queryResult.rows.length }} 列・{{ Math.round(queryResult.executionMs) }} ms
       </span>
@@ -47,7 +48,6 @@ async function run() {
 
 <style scoped>
 .editor { display: flex; flex-direction: column; gap: 10px; }
-textarea { width: 100%; }
 .actions { display: flex; align-items: center; gap: 12px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 
