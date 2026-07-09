@@ -3,6 +3,9 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   ssr: true,
   typescript: { strict: true, typeCheck: false },
+  imports: {
+    dirs: ['stores'], // auto-import useSession etc from app/stores
+  },
   nitro: {
     experimental: { tasks: false },
   },
