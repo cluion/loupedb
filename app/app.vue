@@ -1,3 +1,3 @@
 <template>
-  <div>LoupeDB — scaffold</div>
+  <NuxtPage />
 </template>

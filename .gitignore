@@ -42,3 +42,6 @@ plan/
 
 # SDD scratch
 .superpowers/
+
+# Playwright
+.playwright/
