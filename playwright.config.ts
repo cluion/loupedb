@@ -11,7 +11,9 @@ export default defineConfig({
   webServer: {
     command: 'pnpm run dev',
     url: 'http://localhost:3000',
-    reuseExistingServer: true,
+    // the server needs LOUPEDB_* env vars from this config - reusing a stray
+    // server on :3000 (wrong env) breaks the run in confusing ways
+    reuseExistingServer: false,
     timeout: 180_000,
     env: {
       LOUPEDB_MASTER_KEY: 'a'.repeat(64), // e2e-only key, never a real secret
