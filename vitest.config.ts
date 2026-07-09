@@ -10,5 +10,6 @@ export default defineConfig({
     environment: 'node',
     coverage: { provider: 'v8', reporter: ['text', 'html'], thresholds: { lines: 80 } },
     testTimeout: 60_000, // testcontainers needs a longer timeout
+    hookTimeout: 300_000, // @nuxt/test-utils setup() builds the app in beforeAll
   },
 })
