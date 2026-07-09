@@ -1,7 +1,7 @@
 import type { ConnectionConfig, ConnectionStatus, BrowseOpts } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle } from './connection'
-import { listSchemas, listTables, describeTable } from './schema'
+import { listDatabases, listSchemas, listTables, describeTable } from './schema'
 import { executeUnsafe, browseTable, type CancellableQuery } from './query'
 import { cancelQuery, streamTable } from './stream'
 
@@ -30,6 +30,10 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
     },
     get status() { return status },
 
+    async listDatabases() {
+      if (!handle) throw new Error('not connected')
+      return listDatabases(handle.sql)
+    },
     async listSchemas() {
       if (!handle) throw new Error('not connected')
       return listSchemas(handle.sql)

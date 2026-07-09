@@ -6,6 +6,7 @@ import type { ConnectionConfig } from '#shared/types'
 const fakeDriver = (config: ConnectionConfig): DatabaseDriver => ({
   config,
   async connect() {}, async disconnect() {}, status: 'closed',
+  async listDatabases() { return [] },
   async listSchemas() { return [] }, async listTables() { return [] },
   async describeTable() { return { schema: '', table: '', columns: [], primaryKey: [], foreignKeys: [] } },
   async execute() { return { columns: [], rows: [], executionMs: 0 } },

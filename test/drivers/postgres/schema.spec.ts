@@ -39,6 +39,16 @@ async function setup(): Promise<DatabaseDriver> {
 }
 
 describe('postgres driver schema exploration', () => {
+  it('listDatabases lists connectable databases and excludes templates', async () => {
+    const driver = await setup()
+    const dbs = await driver.listDatabases()
+    const names = dbs.map(d => d.name)
+    expect(names).toContain('loupedb_test')
+    expect(names).not.toContain('template0')
+    expect(names).not.toContain('template1')
+    await driver.disconnect()
+  })
+
   it('listSchemas excludes system schemas and includes app', async () => {
     const driver = await setup()
     const schemas = await driver.listSchemas()

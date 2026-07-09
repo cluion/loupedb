@@ -35,6 +35,7 @@ export interface ConnectionConfig {
   readonly ssl: SslMode
 }
 
+export interface DatabaseInfo { readonly name: string }
 export interface SchemaInfo { readonly name: string }
 export interface TableInfo { readonly schema: string; readonly name: string }
 export interface ForeignKeyInfo {

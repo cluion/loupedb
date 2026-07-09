@@ -1,8 +1,18 @@
 import type postgres from 'postgres'
-import type { SchemaInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
+import type { DatabaseInfo, SchemaInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
+
+// any pg connection can list the server's databases even though it can only
+// read the one it is bound to - the ui opens sibling sessions to browse others
+export async function listDatabases(sql: Sql): Promise<ReadonlyArray<DatabaseInfo>> {
+  const rows = await sql`
+    select datname as name from pg_database
+    where datistemplate = false and datallowconn = true
+    order by datname`
+  return rows.map((r) => ({ name: String(r.name) }))
+}
 
 export async function listSchemas(sql: Sql): Promise<ReadonlyArray<SchemaInfo>> {
   const rows = await sql`
