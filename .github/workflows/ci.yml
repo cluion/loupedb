@@ -1,0 +1,23 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+
+jobs:
+  test:
+    runs-on: ubuntu-latest # runner has docker natively - testcontainers works out of the box
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: 'npm' }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      # test key generated per run - no repo secret needed, DATA_DIR kept out of the workspace
+      - run: echo "LOUPEDB_MASTER_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: npm run test:coverage
+        env:
+          LOUPEDB_DATA_DIR: ${{ runner.temp }}/loupedb-data
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: coverage/ }
