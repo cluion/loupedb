@@ -1,0 +1,19 @@
+services:
+  loupedb:
+    build: .
+    image: cluion/loupedb:latest
+    container_name: loupedb
+    ports:
+      - "127.0.0.1:3000:3000" # localhost only - use a reverse proxy for public access (docs/deploy.md)
+    environment:
+      LOUPEDB_MASTER_KEY: ${LOUPEDB_MASTER_KEY}
+      LOUPEDB_DATA_DIR: /app/data
+      LOUPEDB_APP_PASSWORD: ${LOUPEDB_APP_PASSWORD:-}
+      LOUPEDB_MAX_SESSIONS: ${LOUPEDB_MAX_SESSIONS:-20}
+      LOUPEDB_IDLE_TIMEOUT_MS: ${LOUPEDB_IDLE_TIMEOUT_MS:-1800000}
+    volumes:
+      - loupedb-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  loupedb-data:
