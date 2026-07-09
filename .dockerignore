@@ -1,0 +1,15 @@
+node_modules
+.git
+.nuxt
+.output
+.data
+data
+plan
+test
+test-results
+coverage
+.superpowers
+*.log
+.env
+.env.*
+!.env.example

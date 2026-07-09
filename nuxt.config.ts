@@ -7,6 +7,7 @@ export default defineNuxtConfig({
     dirs: ['stores'], // auto-import useSession etc from app/stores
   },
   nitro: {
+    preset: 'node-server',
     experimental: { tasks: false },
   },
 })
