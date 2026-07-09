@@ -8,16 +8,17 @@ jobs:
     runs-on: ubuntu-latest # runner has docker natively - testcontainers works out of the box
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # reads the packageManager field in package.json
       - uses: actions/setup-node@v4
-        with: { node-version: '24', cache: 'npm' }
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
+        with: { node-version: '24', cache: 'pnpm' }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run typecheck
       # test key generated per run - no repo secret needed, DATA_DIR kept out of the workspace
       - run: echo "LOUPEDB_MASTER_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-      - run: npm run test:coverage
+      - run: pnpm run test:coverage
         env:
           LOUPEDB_DATA_DIR: ${{ runner.temp }}/loupedb-data
-      - run: npm run build
+      - run: pnpm run build
       - uses: actions/upload-artifact@v4
         with: { name: coverage, path: coverage/ }
