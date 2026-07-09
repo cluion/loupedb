@@ -1,0 +1,5 @@
+# HTTPS reverse proxy for LoupeDB (auto TLS via Let's Encrypt)
+# Replace the domain, then: caddy run --config Caddyfile
+loupedb.cluion.com {
+    reverse_proxy 127.0.0.1:3000
+}
