@@ -31,11 +31,20 @@ describe('useConnections', () => {
     await useConnections().remove('abc')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/abc', { method: 'DELETE' })
   })
+
+  it('openDatabase posts the target database to /use-database', async () => {
+    await useConnections().openDatabase('c1', 'seconddb')
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/use-database', {
+      method: 'POST', body: { database: 'seconddb' },
+    })
+  })
 })
 
 describe('useSchema', () => {
   it('builds schema exploration requests', async () => {
     const s = useSchema('c1')
+    await s.databases()
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/databases')
     await s.schemas()
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/schemas')
     await s.tables('app')

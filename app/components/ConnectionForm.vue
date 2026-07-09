@@ -22,7 +22,7 @@ async function submit() {
     <input v-model="form.name" class="full" placeholder="連線名稱" required>
     <input v-model="form.host" placeholder="host" required>
     <input v-model.number="form.port" type="number" placeholder="port">
-    <input v-model="form.database" class="full" placeholder="database" required>
+    <input v-model="form.database" class="full" placeholder="database（選填，預設 postgres）">
     <input v-model="form.username" placeholder="username" required>
     <input v-model="form.password" type="password" placeholder="password" required>
     <!-- SSL mode always offered (spec 4.5.2); auto = server resolves by host -->

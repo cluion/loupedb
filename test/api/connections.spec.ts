@@ -70,6 +70,17 @@ describe('connections API', async () => {
     expect(raw).not.toContain(handle.config.password)
   })
 
+  it('POST without database defaults to the postgres maintenance db', async () => {
+    const { database: _database, ...noDb } = body('nodb')
+    const created = await $fetch<Envelope<{ id: string }>>('/api/connections', { method: 'POST', body: noDb })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const q = await $fetch<Envelope<{ rows: Array<{ db: string }> }>>(`/api/connections/${created.data.id}/query`, {
+      method: 'POST', body: { sql: 'select current_database() as db' },
+    })
+    if (q.ok) expect(q.data.rows).toEqual([{ db: 'postgres' }])
+  })
+
   it('POST with unreachable host returns error envelope, not a crash', async () => {
     const r = await $fetch<Envelope<never>>('/api/connections', {
       method: 'POST',

@@ -9,7 +9,7 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.fill('input[placeholder="連線名稱"]', 'e2e')
   await page.fill('input[placeholder="host"]', process.env.E2E_PG_HOST!)
   await page.fill('input[placeholder="port"]', process.env.E2E_PG_PORT!) // container port is random
-  await page.fill('input[placeholder="database"]', process.env.E2E_PG_DB!)
+  await page.fill('input[placeholder="database（選填，預設 postgres）"]', process.env.E2E_PG_DB!)
   await page.fill('input[placeholder="username"]', process.env.E2E_PG_USER!)
   await page.fill('input[placeholder="password"]', process.env.E2E_PG_PASS!)
   await page.click('button[type="submit"]')
@@ -17,7 +17,8 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // connected: main workspace appears
   await expect(page.getByRole('button', { name: '執行' })).toBeVisible()
 
-  // schema tree: expand public, open the seeded table
+  // tree: expand database (opens a sibling session), then schema, then table
+  await page.getByRole('button', { name: new RegExp(process.env.E2E_PG_DB!) }).click()
   await page.getByRole('button', { name: /public/ }).click()
   await page.getByRole('button', { name: 'items', exact: true }).click()
 

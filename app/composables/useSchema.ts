@@ -1,7 +1,10 @@
-import type { Envelope, SchemaInfo, TableInfo, TableSchema } from '#shared/types'
+import type { DatabaseInfo, Envelope, SchemaInfo, TableInfo, TableSchema } from '#shared/types'
 
 export function useSchema(connId: string) {
   return {
+    async databases() {
+      return await $fetch<Envelope<DatabaseInfo[]>>(`/api/connections/${connId}/databases`)
+    },
     async schemas() {
       return await $fetch<Envelope<SchemaInfo[]>>(`/api/connections/${connId}/schemas`)
     },

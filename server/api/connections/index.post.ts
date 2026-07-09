@@ -10,7 +10,9 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<Omit<Partial<ConnectionConfig>, 'ssl'> & { ssl?: SslMode | 'auto' }>(event)
   const config: ConnectionConfig = {
     name: body.name ?? '', driver: 'postgres', host: body.host ?? '', port: body.port ?? 5432,
-    database: body.database ?? '', username: body.username ?? '', password: body.password ?? '',
+    // empty database falls back to the maintenance db - the tree lets users
+    // browse every database on the server anyway
+    database: body.database || 'postgres', username: body.username ?? '', password: body.password ?? '',
     // ui offers auto (resolve by host) plus explicit ssl modes (spec 4.5.2)
     ssl: !body.ssl || body.ssl === 'auto' ? resolveSslMode(body.host ?? '') : body.ssl,
   }

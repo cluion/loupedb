@@ -2,7 +2,10 @@
 const { currentConnectionId, setCurrentConnectionId } = useSession()
 const { remove } = useConnections()
 const locked = ref(false)
-const selected = ref<{ schema: string; table: string } | null>(null)
+// connId is the sibling session bound to the selected database
+const selected = ref<{ connId: string; database: string; schema: string; table: string } | null>(null)
+// sql runs against the database the user is currently looking at
+const activeConnId = computed(() => selected.value?.connId ?? currentConnectionId.value!)
 
 // probe the app password gate (server middleware): 401 = unlock needed
 onMounted(async () => {
@@ -40,21 +43,24 @@ async function disconnect() {
       <p class="eyebrow">Schema</p>
       <SchemaTree
         :connection-id="currentConnectionId"
-        @select-table="(s, t) => selected = { schema: s, table: t }"
+        @select-table="(cid, db, s, t) => selected = { connId: cid, database: db, schema: s, table: t }"
       />
     </aside>
     <main class="main">
       <section v-if="selected" class="panel">
-        <p class="eyebrow">{{ selected.schema }}.{{ selected.table }}</p>
-        <DataGrid :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
-        <StreamResult :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
+        <p class="eyebrow">{{ selected.database }} / {{ selected.schema }}.{{ selected.table }}</p>
+        <DataGrid
+          :key="`${selected.connId}.${selected.schema}.${selected.table}`"
+          :connection-id="selected.connId" :schema="selected.schema" :table="selected.table"
+        />
+        <StreamResult :connection-id="selected.connId" :schema="selected.schema" :table="selected.table" />
       </section>
       <section v-else class="panel empty">
-        <p>從左側選擇一張表開始瀏覽，或直接在下方執行 SQL。</p>
+        <p>從左側展開資料庫、選擇一張表開始瀏覽，或直接在下方執行 SQL。</p>
       </section>
       <section class="panel">
-        <p class="eyebrow">SQL</p>
-        <SqlEditor :connection-id="currentConnectionId" />
+        <p class="eyebrow">SQL{{ selected ? ` @ ${selected.database}` : '' }}</p>
+        <SqlEditor :key="activeConnId" :connection-id="activeConnId" />
       </section>
     </main>
   </div>
