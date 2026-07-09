@@ -32,6 +32,11 @@ describe('useConnections', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/abc', { method: 'DELETE' })
   })
 
+  it('removeSaved deletes /api/connections/saved/:name with encoding', async () => {
+    await useConnections().removeSaved('my conn')
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/saved/my%20conn', { method: 'DELETE' })
+  })
+
   it('openDatabase posts the target database to /use-database', async () => {
     await useConnections().openDatabase('c1', 'seconddb')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/use-database', {

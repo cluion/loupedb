@@ -81,6 +81,14 @@ describe('connections API', async () => {
     if (q.ok) expect(q.data.rows).toEqual([{ db: 'postgres' }])
   })
 
+  it('DELETE /saved/:name removes the stored config', async () => {
+    await $fetch('/api/connections', { method: 'POST', body: body('to-delete') })
+    const del = await $fetch<Envelope<{ deleted: boolean }>>(`/api/connections/saved/to-delete`, { method: 'DELETE' })
+    expect(del.ok).toBe(true)
+    const list = await $fetch<Envelope<Array<{ name: string }>>>('/api/connections')
+    if (list.ok) expect(list.data.map(c => c.name)).not.toContain('to-delete')
+  })
+
   it('POST with unreachable host returns error envelope, not a crash', async () => {
     const r = await $fetch<Envelope<never>>('/api/connections', {
       method: 'POST',

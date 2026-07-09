@@ -1,5 +1,8 @@
 # LoupeDB
 
+[![CI](https://github.com/cluion/loupedb/actions/workflows/ci.yml/badge.svg)](https://github.com/cluion/loupedb/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-d9a441.svg)](LICENSE)
+
 開源、網頁版、支援多種資料庫、UI 出色的資料庫管理工具。[cluion](https://cluion.com) 旗下產品。
 
 MVP 支援 **PostgreSQL**（driver 抽象層已就緒，MySQL/SQLite 規劃中）。
@@ -46,6 +49,10 @@ docker compose up -d   # http://127.0.0.1:3000
 | `LOUPEDB_MAX_SESSIONS` | 否 | 同時連線上限（預設 20） |
 | `LOUPEDB_IDLE_TIMEOUT_MS` | 否 | 閒置連線回收時間（預設 30 分鐘） |
 
+## 參與貢獻
+
+見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## License
 
-MIT
+[MIT](LICENSE)

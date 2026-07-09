@@ -5,10 +5,11 @@ import ConnectionForm from '../../app/components/ConnectionForm.vue'
 import ConnectionList from '../../app/components/ConnectionList.vue'
 import AppPasswordGate from '../../app/components/AppPasswordGate.vue'
 
-const { createMock, openSavedMock, listMock } = vi.hoisted(() => ({
+const { createMock, openSavedMock, listMock, removeSavedMock } = vi.hoisted(() => ({
   createMock: vi.fn(async () => ({ ok: true as const, data: { id: 'new-id' } })),
   openSavedMock: vi.fn(async () => ({ ok: true as const, data: { id: 'reopened-id' } })),
   listMock: vi.fn(async () => ({ ok: true as const, data: [{ name: 'saved-conn' }] })),
+  removeSavedMock: vi.fn(async () => ({ ok: true as const, data: { deleted: true } })),
 }))
 
 mockNuxtImport('useConnections', () => () => ({
@@ -16,12 +17,14 @@ mockNuxtImport('useConnections', () => () => ({
   openSaved: openSavedMock,
   list: listMock,
   remove: vi.fn(),
+  removeSaved: removeSavedMock,
 }))
 
 beforeEach(() => {
   createMock.mockClear()
   openSavedMock.mockClear()
   listMock.mockClear()
+  removeSavedMock.mockClear()
 })
 
 describe('ConnectionForm', () => {
@@ -67,6 +70,15 @@ describe('ConnectionList', () => {
     await w.vm.$nextTick()
     expect(openSavedMock).toHaveBeenCalledWith('saved-conn')
     expect(w.emitted('connect')).toEqual([['reopened-id', 'saved-conn']])
+  })
+
+  it('deleting a saved connection calls removeSaved and refreshes the list', async () => {
+    const w = await mountSuspended(ConnectionList)
+    const callsBefore = listMock.mock.calls.length
+    await w.find('button[aria-label="刪除已存連線 saved-conn"]').trigger('click')
+    await vi.waitFor(() => expect(removeSavedMock).toHaveBeenCalledWith('saved-conn'))
+    await vi.waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(callsBefore)) // refreshed after delete
+    expect(w.emitted('connect')).toBeUndefined() // deleting must not connect
   })
 
   it('shows error when reconnect fails', async () => {
