@@ -27,16 +27,38 @@ async function toggle(schema: string) {
 </script>
 
 <template>
-  <div>
-    <!-- [DESIGN] 樹狀樣式由使用者設計 -->
+  <div class="tree">
     <p v-if="error" role="alert">{{ error }}</p>
     <div v-for="s in schemasData" :key="s.name">
-      <button @click="toggle(s.name)">{{ expanded === s.name ? '▼' : '▶' }} {{ s.name }}</button>
+      <button class="node" @click="toggle(s.name)">{{ expanded === s.name ? '▼' : '▶' }} {{ s.name }}</button>
       <ul v-if="expanded === s.name">
         <li v-for="t in tablesData[s.name] ?? []" :key="t.name">
-          <button @click="emit('select-table', s.name, t.name)">{{ t.name }}</button>
+          <button class="leaf" @click="emit('select-table', s.name, t.name)">{{ t.name }}</button>
         </li>
       </ul>
     </div>
   </div>
 </template>
+
+<style scoped>
+.tree { font-family: var(--font-data); font-size: 13px; }
+.tree ul {
+  list-style: none;
+  margin: 2px 0 6px;
+  padding: 0 0 0 14px;
+  border-left: 1px solid var(--line);
+}
+.node, .leaf {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--text);
+}
+.node { color: var(--muted); }
+.node:hover, .leaf:hover { background: var(--panel-2); border: none; }
+.leaf:hover { color: var(--brass); }
+</style>

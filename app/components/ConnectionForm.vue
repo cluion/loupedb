@@ -18,23 +18,31 @@ async function submit() {
 </script>
 
 <template>
-  <form @submit.prevent="submit">
-    <!-- [DESIGN] 欄位排版與樣式由使用者設計 -->
-    <input v-model="form.name" placeholder="連線名稱" required>
+  <form class="conn-form" @submit.prevent="submit">
+    <input v-model="form.name" class="full" placeholder="連線名稱" required>
     <input v-model="form.host" placeholder="host" required>
     <input v-model.number="form.port" type="number" placeholder="port">
-    <input v-model="form.database" placeholder="database" required>
+    <input v-model="form.database" class="full" placeholder="database" required>
     <input v-model="form.username" placeholder="username" required>
     <input v-model="form.password" type="password" placeholder="password" required>
     <!-- SSL mode always offered (spec 4.5.2); auto = server resolves by host -->
-    <select v-model="form.ssl" aria-label="SSL mode">
+    <select v-model="form.ssl" class="full" aria-label="SSL mode">
       <option value="auto">SSL: 自動判斷</option>
       <option value="disable">disable</option>
       <option value="prefer">prefer</option>
       <option value="require">require</option>
       <option value="verify-full">verify-full</option>
     </select>
-    <button type="submit">連線</button>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <button type="submit" class="primary full">連線</button>
+    <p v-if="error" role="alert" class="full">{{ error }}</p>
   </form>
 </template>
+
+<style scoped>
+.conn-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.full { grid-column: 1 / -1; }
+</style>

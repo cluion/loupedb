@@ -7,12 +7,13 @@ export default defineConfig({
   testDir: './test/e2e',
   globalSetup: './test/e2e/global-setup',
   timeout: 60_000,
-  use: { baseURL: 'http://localhost:3000' },
+  use: { baseURL: 'http://localhost:3200' },
   webServer: {
-    command: 'pnpm run dev',
-    url: 'http://localhost:3000',
+    // dedicated port so e2e never collides with a dev server on :3000
+    command: 'pnpm exec nuxt dev --port 3200',
+    url: 'http://localhost:3200',
     // the server needs LOUPEDB_* env vars from this config - reusing a stray
-    // server on :3000 (wrong env) breaks the run in confusing ways
+    // server (wrong env) breaks the run in confusing ways
     reuseExistingServer: false,
     timeout: 180_000,
     env: {

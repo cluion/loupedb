@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { currentConnectionId, setCurrentConnectionId } = useSession()
+const { remove } = useConnections()
 const locked = ref(false)
 const selected = ref<{ schema: string; table: string } | null>(null)
 
@@ -11,21 +12,108 @@ onMounted(async () => {
     if ((err as { statusCode?: number }).statusCode === 401) locked.value = true
   }
 })
+
+async function disconnect() {
+  const id = currentConnectionId.value
+  if (id) await remove(id)
+  setCurrentConnectionId(null)
+  selected.value = null
+}
 </script>
 
 <template>
-  <AppPasswordGate v-if="locked" @unlocked="locked = false; refreshNuxtData()" />
-  <ConnectionList v-else-if="!currentConnectionId" @connect="(id) => setCurrentConnectionId(id)" />
-  <div v-else class="layout">
-    <!-- [DESIGN] 主介面版面由使用者設計 -->
-    <SchemaTree
-      :connection-id="currentConnectionId"
-      @select-table="(s, t) => selected = { schema: s, table: t }"
-    />
-    <div v-if="selected">
-      <DataGrid :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
-      <StreamResult :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
+  <div v-if="locked || !currentConnectionId" class="lens-stage">
+    <div class="lens-card">
+      <p class="wordmark mark"><span class="ring" /> LoupeDB</p>
+      <AppPasswordGate v-if="locked" @unlocked="locked = false; refreshNuxtData()" />
+      <ConnectionList v-else @connect="(id) => setCurrentConnectionId(id)" />
     </div>
-    <SqlEditor :connection-id="currentConnectionId" />
+  </div>
+
+  <div v-else class="workspace">
+    <WorkspaceHeader
+      class="area-header"
+      :connection-label="currentConnectionId.slice(0, 8)"
+      @disconnect="disconnect"
+    />
+    <aside class="rail">
+      <p class="eyebrow">Schema</p>
+      <SchemaTree
+        :connection-id="currentConnectionId"
+        @select-table="(s, t) => selected = { schema: s, table: t }"
+      />
+    </aside>
+    <main class="main">
+      <section v-if="selected" class="panel">
+        <p class="eyebrow">{{ selected.schema }}.{{ selected.table }}</p>
+        <DataGrid :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
+        <StreamResult :connection-id="currentConnectionId" :schema="selected.schema" :table="selected.table" />
+      </section>
+      <section v-else class="panel empty">
+        <p>從左側選擇一張表開始瀏覽，或直接在下方執行 SQL。</p>
+      </section>
+      <section class="panel">
+        <p class="eyebrow">SQL</p>
+        <SqlEditor :connection-id="currentConnectionId" />
+      </section>
+    </main>
   </div>
 </template>
+
+<style scoped>
+/* connect screen: light falling through a lens onto the card */
+.lens-stage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(640px circle at 50% 28%, rgba(127, 180, 201, 0.07), transparent 62%),
+    var(--ink);
+}
+.lens-card {
+  width: min(440px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--brass);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+.mark { font-size: 18px; margin: 0 0 22px; }
+
+/* workspace: header on top, schema rail left, work area right */
+.workspace {
+  height: 100vh;
+  display: grid;
+  grid-template:
+    "header header" auto
+    "rail   main" 1fr / 240px 1fr;
+}
+.area-header { grid-area: header; }
+.rail {
+  grid-area: rail;
+  border-right: 1px solid var(--line);
+  padding: 14px;
+  overflow-y: auto;
+  background: var(--panel);
+}
+.main {
+  grid-area: main;
+  padding: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.empty { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .workspace {
+    grid-template:
+      "header" auto
+      "rail" auto
+      "main" 1fr / 1fr;
+  }
+  .rail { border-right: none; border-bottom: 1px solid var(--line); max-height: 30vh; }
+}
+</style>

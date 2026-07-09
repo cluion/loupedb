@@ -12,9 +12,16 @@ function submit() {
 </script>
 
 <template>
-  <form @submit.prevent="submit">
-    <!-- [DESIGN] 樣式由使用者設計 -->
+  <form class="gate" @submit.prevent="submit">
     <input v-model="input" type="password" placeholder="App 密碼" required>
-    <button type="submit">解鎖</button>
+    <button type="submit" class="primary">解鎖</button>
   </form>
 </template>
+
+<style scoped>
+.gate {
+  display: flex;
+  gap: 10px;
+}
+.gate input { flex: 1; }
+</style>

@@ -7,7 +7,11 @@ import { useSession } from '../../app/stores/session'
 const { executeMock } = vi.hoisted(() => ({
   executeMock: vi.fn(async () => ({
     ok: true as const,
-    data: { columns: [], rows: [{ one: 1 }], executionMs: 3 },
+    data: {
+      columns: [{ name: 'one', nativeType: 'int4', type: 'integer' as const, nullable: true }],
+      rows: [{ one: 1 }],
+      executionMs: 3,
+    },
   })),
 }))
 
@@ -29,6 +33,8 @@ describe('SqlEditor', () => {
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 1 as one')
     expect(useSession().queryResult.value?.rows).toEqual([{ one: 1 }])
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true)) // result rendered inline
+    expect(w.find('tbody td').text()).toBe('1')
   })
 
   it('shows error on failed execution and clears stale state', async () => {

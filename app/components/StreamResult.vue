@@ -36,11 +36,21 @@ onUnmounted(() => es?.close())
 </script>
 
 <template>
-  <div>
-    <!-- [DESIGN] 樣式由使用者設計 -->
+  <div class="stream">
     <button @click="start">串流載入</button>
-    <button @click="stop">取消</button>
+    <button class="ghost" @click="stop">取消</button>
+    <span class="count">已載入 {{ rows.length }} 列</span>
     <p v-if="error" role="alert">{{ error }}</p>
-    <div>已載入 {{ rows.length }} 列</div>
   </div>
 </template>
+
+<style scoped>
+.stream {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.count { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+</style>
