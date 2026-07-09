@@ -3,7 +3,8 @@ import type { ConnectionConfig, SslMode } from '#shared/types'
 import { resolveSslMode } from '../../security/ssl'
 import { loadConnections, saveConnections } from '../../security/connectionStore'
 import { useConnectionManager } from '../../utils/connectionManager'
-import { ok, fail, toDatabaseError } from '../../utils/api'
+import { ok, fail } from '../../utils/api'
+import { toDatabaseError } from '../../utils/errors'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<Omit<Partial<ConnectionConfig>, 'ssl'> & { ssl?: SslMode | 'auto' }>(event)

@@ -1,5 +1,6 @@
 import { useConnectionManager } from '../../../utils/connectionManager'
-import { ok, fail, toDatabaseError } from '../../../utils/api'
+import { ok, fail } from '../../../utils/api'
+import { toDatabaseError } from '../../../utils/errors'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') as string

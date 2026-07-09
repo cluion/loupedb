@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { ok, fail, toDatabaseError } from '../../server/utils/api'
+import { ok, fail } from '../../server/utils/api'
+import { toDatabaseError } from '../../server/utils/errors'
 
 describe('api envelope', () => {
   it('ok wraps data', () => {

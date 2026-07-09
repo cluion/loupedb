@@ -1,6 +1,6 @@
 import { createEventStream, getQuery } from 'h3'
 import { useConnectionManager } from '../../../utils/connectionManager'
-import { toDatabaseError } from '../../../utils/api'
+import { toDatabaseError } from '../../../utils/errors'
 
 export default defineEventHandler((event) => {
   const id = getRouterParam(event, 'id') as string

@@ -5,7 +5,8 @@ import { toDatabaseError } from './errors'
 import { useConnectionManager } from './connectionManager'
 
 // Envelope<T> lives in shared/types.ts - frontend composables consume it too
-export { toDatabaseError } from './errors' // route handlers import it from here
+// toDatabaseError is imported from ./errors directly - re-exporting it here
+// duplicates the symbol in nitro auto-import scanning
 
 export function ok<T>(data: T): Envelope<T> {
   return { ok: true, data }

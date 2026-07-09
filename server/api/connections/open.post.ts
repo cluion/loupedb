@@ -1,7 +1,8 @@
 import { readBody } from 'h3'
 import { loadConnections } from '../../security/connectionStore'
 import { useConnectionManager } from '../../utils/connectionManager'
-import { ok, fail, toDatabaseError } from '../../utils/api'
+import { ok, fail } from '../../utils/api'
+import { toDatabaseError } from '../../utils/errors'
 
 // reconnect a saved connection - password is decrypted server-side only
 export default defineEventHandler(async (event) => {
