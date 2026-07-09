@@ -6,7 +6,7 @@ import { useConnectionManager } from '../../utils/connectionManager'
 import { ok, fail, toDatabaseError } from '../../utils/api'
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<Partial<ConnectionConfig> & { ssl?: SslMode | 'auto' }>(event)
+  const body = await readBody<Omit<Partial<ConnectionConfig>, 'ssl'> & { ssl?: SslMode | 'auto' }>(event)
   const config: ConnectionConfig = {
     name: body.name ?? '', driver: 'postgres', host: body.host ?? '', port: body.port ?? 5432,
     database: body.database ?? '', username: body.username ?? '', password: body.password ?? '',
