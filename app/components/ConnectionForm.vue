@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SslMode } from '#shared/types'
 
-const emit = defineEmits<{ created: [id: string] }>()
+const emit = defineEmits<{ created: [id: string, name: string] }>()
 const { create } = useConnections()
 const form = reactive({
   name: '', host: '', port: 5432, database: '', username: '', password: '',
@@ -12,7 +12,7 @@ const error = ref<string | null>(null)
 async function submit() {
   error.value = null
   const res = await create({ ...form })
-  if (res.ok) emit('created', res.data.id)
+  if (res.ok) emit('created', res.data.id, form.name)
   else error.value = res.error.message
 }
 </script>

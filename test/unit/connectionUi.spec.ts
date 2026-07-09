@@ -40,7 +40,7 @@ describe('ConnectionForm', () => {
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
       name: 'n', host: 'h', port: 5433, database: 'd', username: 'u', password: 'p', ssl: 'require',
     }))
-    expect(w.emitted('created')).toEqual([['new-id']])
+    expect(w.emitted('created')).toEqual([['new-id', 'n']]) // name rides along for display
   })
 
   it('ssl defaults to auto and password input is type password', async () => {
@@ -66,7 +66,7 @@ describe('ConnectionList', () => {
     await w.find('li button').trigger('click')
     await w.vm.$nextTick()
     expect(openSavedMock).toHaveBeenCalledWith('saved-conn')
-    expect(w.emitted('connect')).toEqual([['reopened-id']])
+    expect(w.emitted('connect')).toEqual([['reopened-id', 'saved-conn']])
   })
 
   it('shows error when reconnect fails', async () => {

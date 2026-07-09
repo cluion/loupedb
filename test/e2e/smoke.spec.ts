@@ -24,4 +24,14 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
 
   // data grid renders the table content end to end
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+
+  // structure tab shows columns with pk badge
+  await page.getByRole('button', { name: '結構' }).click()
+  await expect(page.getByRole('cell', { name: 'PK' })).toBeVisible()
+  await expect(page.getByText('int4').first()).toBeVisible()
+
+  // header shows the connection name, and disconnect returns to the lens screen
+  await expect(page.getByText('e2e', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '中斷連線' }).click()
+  await expect(page.getByRole('button', { name: '連線' })).toBeVisible()
 })

@@ -6,6 +6,7 @@ const { browse } = useQuery(props.connectionId)
 
 const result = ref<QueryResult | null>(null)
 const error = ref<string | null>(null)
+const loading = ref(false)
 const limit = ref(50)
 const offset = ref(0)
 const orderBy = ref<string | undefined>(undefined)
@@ -20,6 +21,7 @@ const isLastPage = computed(() => (result.value?.rows.length ?? 0) < limit.value
 
 async function load() {
   error.value = null
+  loading.value = true
   const filter: BrowseOpts['filter'] = filterColumn.value
     ? [{ column: filterColumn.value, op: filterOp.value, value: filterValue.value }]
     : undefined
@@ -27,6 +29,7 @@ async function load() {
     limit: limit.value, offset: offset.value,
     orderBy: orderBy.value, orderDir: orderDir.value, filter,
   })
+  loading.value = false
   if (r.ok) result.value = r.data
   else error.value = r.error.message
 }
@@ -73,6 +76,7 @@ function nextPage() {
       <input v-model="filterValue" placeholder="值">
       <button type="submit">套用</button>
     </form>
+    <div v-if="loading && !result" class="loading">載入中…</div>
     <div class="scroll">
       <table v-if="result">
         <thead>
@@ -105,6 +109,7 @@ function nextPage() {
 
 <style scoped>
 .grid { display: flex; flex-direction: column; gap: 10px; }
+.loading { color: var(--muted); font-size: 13px; }
 .toolbar { display: flex; gap: 8px; }
 .toolbar input { flex: 1; min-width: 80px; }
 

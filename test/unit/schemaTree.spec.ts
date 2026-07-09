@@ -80,6 +80,17 @@ describe('SchemaTree (database > schema > table)', () => {
     await vi.waitFor(() => expect(w.text()).toContain('沒有資料表'))
   })
 
+  it('shows a loading hint while the sibling session opens', async () => {
+    let release!: (v: unknown) => void
+    openDatabaseMock.mockReturnValueOnce(new Promise((r) => { release = r }) as never)
+    const w = await mountSuspended(SchemaTree, { props })
+    await vi.waitFor(() => expect(w.text()).toContain('appdb'))
+    await w.findAll('button').find(b => b.text().includes('appdb'))!.trigger('click')
+    expect(w.text()).toContain('連線中')
+    release({ ok: true, data: { id: 'sess-appdb' } })
+    await vi.waitFor(() => expect(w.text()).not.toContain('連線中'))
+  })
+
   it('failed sibling open shows the error and collapses back', async () => {
     openDatabaseMock.mockResolvedValueOnce({ ok: false, error: { code: 'X', message: 'no permission', severity: 'error', retryable: false } } as never)
     const w = await mountSuspended(SchemaTree, { props })

@@ -4,13 +4,15 @@ import { useSession } from '../../app/stores/session'
 import type { QueryResult } from '#shared/types'
 
 describe('useSession', () => {
-  it('setCurrentConnectionId updates currentConnectionId', () => {
+  it('setCurrentConnection updates id and display name together', () => {
     const s = useSession()
     expect(s.currentConnectionId.value).toBeNull()
-    s.setCurrentConnectionId('abc')
+    s.setCurrentConnection('abc', 'my-db')
     expect(s.currentConnectionId.value).toBe('abc')
-    s.setCurrentConnectionId(null)
+    expect(s.currentConnectionName.value).toBe('my-db')
+    s.setCurrentConnection(null)
     expect(s.currentConnectionId.value).toBeNull()
+    expect(s.currentConnectionName.value).toBeNull()
   })
 
   it('setQueryResult updates queryResult', () => {
@@ -22,8 +24,9 @@ describe('useSession', () => {
 
   it('state is shared across useSession calls (useState)', () => {
     const a = useSession()
-    a.setCurrentConnectionId('shared')
+    a.setCurrentConnection('shared', 'label')
     const b = useSession()
     expect(b.currentConnectionId.value).toBe('shared')
+    expect(b.currentConnectionName.value).toBe('label')
   })
 })

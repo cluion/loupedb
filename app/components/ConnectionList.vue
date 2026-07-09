@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const emit = defineEmits<{ connect: [id: string] }>()
+const emit = defineEmits<{ connect: [id: string, name: string] }>()
 const { list, openSaved } = useConnections()
 const { data, refresh } = await useAsyncData('conns', () => list())
 const error = ref<string | null>(null)
@@ -8,14 +8,14 @@ const error = ref<string | null>(null)
 async function reconnect(name: string) {
   error.value = null
   const res = await openSaved(name)
-  if (res.ok) emit('connect', res.data.id)
+  if (res.ok) emit('connect', res.data.id, name)
   else error.value = res.error.message
 }
 </script>
 
 <template>
   <div>
-    <ConnectionForm @created="async (id) => { await refresh(); emit('connect', id) }" />
+    <ConnectionForm @created="async (id, name) => { await refresh(); emit('connect', id, name) }" />
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="data?.ok && data.data.length">
       <p class="eyebrow saved-label">已存連線</p>

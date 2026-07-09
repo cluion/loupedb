@@ -37,6 +37,16 @@ beforeEach(() => {
 })
 
 describe('DataGrid', () => {
+  it('shows a loading state until the first page arrives', async () => {
+    let release!: (v: unknown) => void
+    browseMock.mockReturnValueOnce(new Promise((r) => { release = r }) as never)
+    const w = await mountSuspended(DataGrid, { props })
+    expect(w.text()).toContain('載入中')
+    release(result([{ id: 1, label: 'a' }]))
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    expect(w.text()).not.toContain('載入中')
+  })
+
   it('renders headers and rows from browse', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))

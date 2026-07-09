@@ -14,6 +14,7 @@ const schemasByDb = ref<Record<string, ReadonlyArray<SchemaInfo>>>({})
 const expandedSchema = ref<string | null>(null)
 const tablesData = ref<Record<string, ReadonlyArray<TableInfo>>>({}) // `${db}.${schema}` -> tables
 const error = ref<string | null>(null)
+const connectingDb = ref<string | null>(null) // sibling session being opened
 
 onMounted(async () => {
   const r = await useSchema(props.connectionId).databases()
@@ -29,7 +30,9 @@ async function toggleDb(db: string) {
 
   let sid = dbSessions.value[db]
   if (!sid) {
+    connectingDb.value = db
     const r = await openDatabase(props.connectionId, db)
+    connectingDb.value = null
     if (!r.ok) {
       error.value = r.error.message
       expandedDb.value = null
@@ -61,6 +64,7 @@ async function toggleSchema(db: string, schema: string) {
     <div v-for="d in databases" :key="d.name">
       <button class="node db" @click="toggleDb(d.name)">
         {{ expandedDb === d.name ? '▼' : '▶' }} <span class="dbname">{{ d.name }}</span>
+        <span v-if="connectingDb === d.name" class="connecting">連線中…</span>
       </button>
       <ul v-if="expandedDb === d.name">
         <li v-for="s in schemasByDb[d.name] ?? []" :key="s.name">
@@ -104,4 +108,5 @@ async function toggleSchema(db: string, schema: string) {
 .node:hover, .leaf:hover { background: var(--panel-2); border: none; }
 .leaf:hover { color: var(--brass); }
 .empty { color: var(--muted); padding: 4px 6px; font-style: italic; }
+.connecting { color: var(--muted); font-size: 11px; margin-left: 6px; }
 </style>
