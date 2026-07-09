@@ -24,6 +24,7 @@
     "@nuxt/test-utils": "4.0.3",
     "@testcontainers/postgresql": "12.0.4",
     "@vitest/coverage-v8": "4.1.9",
+    "@vue/test-utils": "2.4.11",
     "eslint": "10.5.0",
     "happy-dom": "20.10.6",
     "testcontainers": "12.0.4",
