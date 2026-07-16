@@ -57,6 +57,8 @@ describe('useSchema', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables', { query: { schema: 'app' } })
     await s.describe('app', 'users')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables/app/users')
+    await s.columns('app')
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/columns', { query: { schema: 'app' } })
   })
 })
 

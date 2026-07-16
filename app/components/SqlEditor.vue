@@ -6,7 +6,8 @@ const props = withDefaults(defineProps<{
   connectionId: string
   modelValue?: string
   result?: QueryResult | null
-}>(), { modelValue: 'SELECT * FROM ', result: null })
+  defaultSchema?: string | null
+}>(), { modelValue: 'SELECT * FROM ', result: null, defaultSchema: null })
 const emit = defineEmits<{
   'update:modelValue': [sql: string]
   'update:result': [result: QueryResult | null]
@@ -31,6 +32,10 @@ watch(() => props.modelValue, (value) => {
 })
 watch(() => props.result, (value) => { queryResult.value = value })
 watch(() => props.connectionId, () => { error.value = null })
+
+// completion metadata for the bound connection - loads lazily, cached per id
+const completion = computed(() => useSqlCompletion(props.connectionId))
+watch(completion, (c) => { c.ensureLoaded() }, { immediate: true })
 
 function updateSql(value: string) {
   sql.value = value
@@ -64,6 +69,8 @@ async function run(target: RunnableSql | null = runnable.value) {
   <div class="editor">
     <SqlCodeEditor
       :model-value="sql"
+      :schema="completion.namespace.value"
+      :default-schema="defaultSchema ?? 'public'"
       @update:model-value="updateSql"
       @update:runnable="runnable = $event"
       @run="run($event)"

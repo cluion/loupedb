@@ -13,10 +13,18 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.fill('input[placeholder="database（選填，預設 postgres）"]', process.env.E2E_PG_DB!)
   await page.fill('input[placeholder="username"]', process.env.E2E_PG_USER!)
   await page.fill('input[placeholder="password"]', process.env.E2E_PG_PASS!)
+  const columnsLoaded = page.waitForResponse((r) => r.url().includes('/columns'))
   await page.click('button[type="submit"]')
 
   // connected: main workspace appears
   await expect(page.getByRole('button', { name: '執行' })).toBeVisible()
+
+  // schema-aware autocomplete: typing a partial table name suggests it
+  await columnsLoaded
+  await page.locator('.cm-content').click()
+  await page.keyboard.type('select * from ite')
+  await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('items')
+  await page.keyboard.press('Escape')
 
   // tree: expand database (opens a sibling session), then schema, then table
   await page.getByRole('button', { name: new RegExp(process.env.E2E_PG_DB!) }).click()

@@ -1,5 +1,5 @@
 import type postgres from 'postgres'
-import type { DatabaseInfo, SchemaInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
+import type { DatabaseInfo, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
@@ -28,6 +28,18 @@ export async function listTables(sql: Sql, schema: string): Promise<ReadonlyArra
     where table_schema = ${schema} and table_type = 'BASE TABLE'
     order by table_name`
   return rows.map((r) => ({ schema, name: String(r.name) }))
+}
+
+// every column of every base table in one round trip - autocomplete metadata
+export async function listColumns(sql: Sql, schema: string): Promise<ReadonlyArray<TableColumnInfo>> {
+  const rows = await sql`
+    select c.table_name as tbl, c.column_name as name
+    from information_schema.columns c
+    join information_schema.tables t
+      on t.table_schema = c.table_schema and t.table_name = c.table_name
+    where c.table_schema = ${schema} and t.table_type = 'BASE TABLE'
+    order by c.table_name, c.ordinal_position`
+  return rows.map((r) => ({ table: String(r.tbl), name: String(r.name) }))
 }
 
 export async function describeTable(sql: Sql, schema: string, table: string): Promise<TableSchema> {

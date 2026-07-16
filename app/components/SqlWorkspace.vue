@@ -217,6 +217,7 @@ function timeLabel(at: number): string {
         :connection-id="workspace.activeTab.value.connectionId"
         :model-value="workspace.activeTab.value.sql"
         :result="workspace.activeTab.value.result"
+        :default-schema="workspace.activeTab.value.schema"
         @update:model-value="workspace.updateTab(workspace.activeTab.value!.id, { sql: $event })"
         @update:result="updateResult(workspace.activeTab.value!.id, $event)"
         @executed="onExecuted"

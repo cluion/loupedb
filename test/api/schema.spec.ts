@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setup, $fetch } from '@nuxt/test-utils/e2e'
 import postgres from 'postgres'
 import { startPgContainer, type PgTestHandle } from '../helpers/pg-container'
-import type { Envelope, TableSchema, SchemaInfo, TableInfo } from '#shared/types'
+import type { Envelope, TableSchema, SchemaInfo, TableInfo, TableColumnInfo } from '#shared/types'
 
 process.env.LOUPEDB_MASTER_KEY = 'a'.repeat(64)
 process.env.LOUPEDB_DATA_DIR = mkdtempSync(join(tmpdir(), 'loupedb-api-'))
@@ -48,6 +48,15 @@ describe('schema exploration API', async () => {
     const r = await $fetch<Envelope<TableInfo[]>>(`/api/connections/${connId}/tables?schema=app`)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.data.map(t => t.name)).toContain('users')
+  })
+
+  it('GET /columns?schema=app lists all columns for completion', async () => {
+    const r = await $fetch<Envelope<TableColumnInfo[]>>(`/api/connections/${connId}/columns?schema=app`)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data).toContainEqual({ table: 'users', name: 'id' })
+      expect(r.data).toContainEqual({ table: 'users', name: 'name' })
+    }
   })
 
   it('GET /tables/app/users describes the table', async () => {

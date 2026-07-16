@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { Decoration, EditorView, keymap, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { listSqlStatements, resolveRunnableSql, type RunnableSql } from '../utils/sqlStatements'
+import type { SqlNamespace } from '../utils/sqlCompletion'
 
-const props = defineProps<{ modelValue: string }>()
+const props = withDefaults(defineProps<{
+  modelValue: string
+  schema?: SqlNamespace | null
+  defaultSchema?: string
+}>(), { schema: null, defaultSchema: 'public' })
 const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:runnable': [runnable: RunnableSql | null]
@@ -17,6 +22,17 @@ const emit = defineEmits<{
 function runnableOf(state: EditorState): RunnableSql | null {
   const sel = state.selection.main
   return resolveRunnableSql(state.doc.toString(), sel.from, sel.to)
+}
+
+// the sql() extension lives in a compartment so completion metadata arriving
+// after mount (or a database rebind) reconfigures the live editor in place
+const langCompartment = new Compartment()
+function sqlExtension() {
+  return sql({
+    dialect: PostgreSQL,
+    schema: props.schema ?? undefined,
+    defaultSchema: props.defaultSchema,
+  })
 }
 
 // with several statements in the draft, show which one ⌘⏎ would execute
@@ -89,7 +105,7 @@ onMounted(() => {
         // before basicSetup so Mod-Enter wins over the default insert-newline
         keymap.of([{ key: 'Mod-Enter', run: (v) => { emit('run', runnableOf(v.state)); return true } }]),
         basicSetup,
-        sql({ dialect: PostgreSQL }),
+        langCompartment.of(sqlExtension()),
         syntaxHighlighting(loupeHighlight),
         loupeTheme,
         statementHighlighter,
@@ -107,6 +123,10 @@ watch(() => props.modelValue, (v) => {
   if (view && v !== view.state.doc.toString()) {
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } })
   }
+})
+
+watch(() => [props.schema, props.defaultSchema] as const, () => {
+  view?.dispatch({ effects: langCompartment.reconfigure(sqlExtension()) })
 })
 
 onUnmounted(() => view?.destroy())

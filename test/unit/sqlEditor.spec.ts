@@ -19,6 +19,12 @@ mockNuxtImport('useQuery', () => () => ({
   browse: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
 }))
 
+const { ensureLoadedMock } = vi.hoisted(() => ({ ensureLoadedMock: vi.fn(async () => {}) }))
+mockNuxtImport('useSqlCompletion', () => () => ({
+  namespace: ref({ public: { items: ['id', 'label'] } }),
+  ensureLoaded: ensureLoadedMock,
+}))
+
 beforeEach(() => {
   executeMock.mockClear()
 })
@@ -26,7 +32,7 @@ beforeEach(() => {
 // CodeMirror needs a real browser - unit tests drive the same v-model contract
 // through a textarea stand-in; the e2e test exercises the real editor
 const SqlCodeEditorStub = {
-  props: ['modelValue'],
+  props: ['modelValue', 'schema', 'defaultSchema'],
   emits: ['update:modelValue', 'update:runnable', 'run'],
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
 }
@@ -86,6 +92,22 @@ describe('SqlEditor', () => {
     })
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 42 as answer;')
+  })
+
+  it('feeds completion metadata and default schema into the code editor', async () => {
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, defaultSchema: 'app' },
+    })
+    expect(ensureLoadedMock).toHaveBeenCalled()
+    const stub = w.findComponent(SqlCodeEditorStub)
+    expect(stub.props('schema')).toEqual({ public: { items: ['id', 'label'] } })
+    expect(stub.props('defaultSchema')).toBe('app')
+  })
+
+  it('falls back to the public schema when no context is given', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    expect(w.findComponent(SqlCodeEditorStub).props('defaultSchema')).toBe('public')
   })
 
   it('reports a successful execution for history recording', async () => {

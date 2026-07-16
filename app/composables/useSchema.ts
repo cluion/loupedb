@@ -1,4 +1,4 @@
-import type { DatabaseInfo, Envelope, SchemaInfo, TableInfo, TableSchema } from '#shared/types'
+import type { DatabaseInfo, Envelope, SchemaInfo, TableColumnInfo, TableInfo, TableSchema } from '#shared/types'
 
 export function useSchema(connId: string) {
   return {
@@ -13,6 +13,9 @@ export function useSchema(connId: string) {
     },
     async describe(schema: string, table: string) {
       return await $fetch<Envelope<TableSchema>>(`/api/connections/${connId}/tables/${schema}/${table}`)
+    },
+    async columns(schema: string) {
+      return await $fetch<Envelope<TableColumnInfo[]>>(`/api/connections/${connId}/columns`, { query: { schema } })
     },
   }
 }

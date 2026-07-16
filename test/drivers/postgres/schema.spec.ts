@@ -67,6 +67,15 @@ describe('postgres driver schema exploration', () => {
     await driver.disconnect()
   })
 
+  it('listColumns returns every column of the schema in one call', async () => {
+    const driver = await setup()
+    const cols = await driver.listColumns('app')
+    const users = cols.filter(c => c.table === 'users').map(c => c.name)
+    expect(users).toEqual(['id', 'name', 'data', 'fav', 'created']) // ordinal order
+    expect(cols.filter(c => c.table === 'posts').map(c => c.name)).toEqual(['id', 'author_id'])
+    await driver.disconnect()
+  })
+
   it('describeTable returns normalized columns, pk and fk', async () => {
     const driver = await setup()
     const ts = await driver.describeTable('app', 'users')
