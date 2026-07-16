@@ -1,25 +1,52 @@
 <script setup lang="ts">
-const props = defineProps<{ connectionId: string }>()
-const { execute } = useQuery(props.connectionId)
-const { queryResult, setQueryResult } = useSession()
+import type { QueryResult } from '#shared/types'
 
-const sql = ref('SELECT * FROM ')
+const props = withDefaults(defineProps<{
+  connectionId: string
+  modelValue?: string
+  result?: QueryResult | null
+}>(), { modelValue: 'SELECT * FROM ', result: null })
+const emit = defineEmits<{
+  'update:modelValue': [sql: string]
+  'update:result': [result: QueryResult | null]
+}>()
+
+const sql = ref(props.modelValue)
+const queryResult = ref<QueryResult | null>(props.result)
 const error = ref<string | null>(null)
 const running = ref(false)
 
+watch(() => props.modelValue, (value) => {
+  if (value !== sql.value) sql.value = value
+})
+watch(() => props.result, (value) => { queryResult.value = value })
+watch(() => props.connectionId, () => { error.value = null })
+
+function updateSql(value: string) {
+  sql.value = value
+  emit('update:modelValue', value)
+}
+
 async function run() {
   error.value = null
+  queryResult.value = null
+  emit('update:result', null)
   running.value = true
-  const r = await execute(sql.value)
+  // Resolve from the latest prop: rebinding a tab to another database must not
+  // leave a closure executing against the previous connection id.
+  const r = await useQuery(props.connectionId).execute(sql.value)
   running.value = false
-  if (r.ok) setQueryResult(r.data)
+  if (r.ok) {
+    queryResult.value = r.data
+    emit('update:result', r.data)
+  }
   else error.value = r.error.message
 }
 </script>
 
 <template>
   <div class="editor">
-    <SqlCodeEditor v-model="sql" @run="run" />
+    <SqlCodeEditor :model-value="sql" @update:model-value="updateSql" @run="run" />
     <div class="actions">
       <button class="primary" :disabled="running" title="⌘⏎ / Ctrl+Enter" @click="run">
         {{ running ? '執行中…' : '執行' }}

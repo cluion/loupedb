@@ -1,5 +1,7 @@
 <script setup lang="ts">
-const { currentConnectionId, currentConnectionName, setCurrentConnection } = useSession()
+import { clearSqlWorkspacePersistence } from '../stores/sqlWorkspace'
+
+const { currentConnectionId, currentConnectionName, setCurrentConnection, restoreSession } = useSession()
 const { remove } = useConnections()
 const locked = ref(false)
 // connId is the sibling session bound to the selected database
@@ -9,17 +11,34 @@ const view = ref<'data' | 'structure'>('data')
 const activeConnId = computed(() => selected.value?.connId ?? currentConnectionId.value!)
 
 // probe the app password gate (server middleware): 401 = unlock needed
-onMounted(async () => {
+// Restoring during Vue's hydration phase can leave client-only CodeMirror on
+// its SSR placeholder. Wait until Nuxt has fully mounted before opening the
+// persisted workspace.
+onNuxtReady(async () => {
+  const restoredId = restoreSession()
   try {
     await $fetch('/api/connections')
   } catch (err) {
-    if ((err as { statusCode?: number }).statusCode === 401) locked.value = true
+    if ((err as { statusCode?: number }).statusCode === 401) {
+      locked.value = true
+      return
+    }
+  }
+  // Browser storage can outlive the in-memory server session. Do not strand the
+  // user in a workspace bound to an id that disappeared after a server restart.
+  if (restoredId) {
+    const check = await useSchema(restoredId).databases()
+    if (!check.ok && check.error.code === 'NO_CONN') {
+      clearSqlWorkspacePersistence(restoredId)
+      setCurrentConnection(null)
+    }
   }
 })
 
 async function disconnect() {
   const id = currentConnectionId.value
   if (id) await remove(id) // server cascades sibling sessions
+  if (id) clearSqlWorkspacePersistence(id)
   setCurrentConnection(null)
   selected.value = null
 }
@@ -73,8 +92,12 @@ async function disconnect() {
         <p>從左側展開資料庫、選擇一張表開始瀏覽，或直接在下方執行 SQL。</p>
       </section>
       <section class="panel">
-        <p class="eyebrow">SQL{{ selected ? ` @ ${selected.database}` : '' }}</p>
-        <SqlEditor :key="activeConnId" :connection-id="activeConnId" />
+        <SqlWorkspace
+          :workspace-id="currentConnectionId"
+          :suggested-connection-id="activeConnId"
+          :suggested-database="selected?.database ?? null"
+          :suggested-schema="selected?.schema ?? null"
+        />
       </section>
     </main>
   </div>

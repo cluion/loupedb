@@ -36,6 +36,20 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '執行', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'lens', exact: true })).toBeVisible()
 
+  // SQL tabs keep independent drafts and survive a full browser refresh
+  await page.getByRole('button', { name: '新增 SQL 分頁' }).click()
+  await page.locator('.cm-content').fill("select 'persisted draft' as note")
+  await page.getByRole('tab', { selected: true }).dblclick()
+  await page.getByRole('textbox', { name: '重新命名 SQL 分頁' }).fill('Report draft')
+  await page.getByRole('textbox', { name: '重新命名 SQL 分頁' }).press('Enter')
+
+  await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/connections') && r.request().method() === 'GET'),
+    page.reload(),
+  ])
+  await expect(page.getByRole('tab', { name: /Report draft/, selected: true })).toBeVisible()
+  await expect(page.locator('.cm-content')).toContainText("select 'persisted draft' as note")
+
   // header shows the connection name, and disconnect returns to the lens screen
   await expect(page.getByText('e2e', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '中斷連線' }).click()
