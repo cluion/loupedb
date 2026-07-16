@@ -41,6 +41,32 @@ describe('toCsv', () => {
   })
 })
 
+describe('formula injection guard', () => {
+  it('prefixes string cells starting with =, +, - or @ in CSV', () => {
+    const r = result({ rows: [
+      { id: 1, note: '=HYPERLINK("http://evil")' },
+      { id: 2, note: '+SUM(A1)' },
+      { id: 3, note: '-2+3' },
+      { id: 4, note: '@cmd' },
+    ] })
+    expect(toCsv(r)).toBe(
+      `id,note\r\n1,"'=HYPERLINK(""http://evil"")"\r\n2,'+SUM(A1)\r\n3,'-2+3\r\n4,'@cmd`,
+    )
+  })
+
+  it('prefixes dangerous string cells in TSV too', () => {
+    const r = result({ rows: [{ id: 1, note: '=1+1' }] })
+    expect(toTsv(r)).toBe(`id\tnote\n1\t'=1+1`)
+  })
+
+  it('leaves negative numbers and JSON/Markdown values untouched', () => {
+    const r = result({ rows: [{ id: -5, note: '=x' }] })
+    expect(toCsv(r).split('\r\n')[1]).toBe(`-5,'=x`)
+    expect(JSON.parse(toJson(r))).toEqual([{ id: -5, note: '=x' }])
+    expect(toMarkdown(r)).toContain('| -5 | =x |')
+  })
+})
+
 describe('toTsv', () => {
   it('joins with tabs and flattens tabs/newlines inside values', () => {
     const r = result({ rows: [{ id: 1, note: 'a\tb\nc' }, { id: 2, note: null }] })

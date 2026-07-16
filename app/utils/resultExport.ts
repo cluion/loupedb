@@ -23,8 +23,15 @@ function cellText(value: unknown): string {
   return String(value)
 }
 
+// OWASP CSV-injection guard: a string cell starting with =, +, - or @ would
+// execute as a formula in Excel/Sheets, so it gets an apostrophe prefix.
+// Only strings are guarded - typed numbers like -5 must round-trip untouched.
+function formulaSafe(value: unknown, text: string): string {
+  return typeof value === 'string' && /^[=+\-@]/.test(text) ? `'${text}` : text
+}
+
 function csvField(value: unknown): string {
-  const text = cellText(value)
+  const text = formulaSafe(value, cellText(value))
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
@@ -40,7 +47,7 @@ export function toCsv(result: QueryResult): string {
 export function toTsv(result: QueryResult): string {
   const names = result.columns.map((c) => c.name)
   // tabs/newlines inside a value would break the grid when pasted into a spreadsheet
-  const field = (value: unknown) => cellText(value).replaceAll(/[\t\r\n]+/g, ' ')
+  const field = (value: unknown) => formulaSafe(value, cellText(value).replaceAll(/[\t\r\n]+/g, ' '))
   const lines = [
     names.map(field).join('\t'),
     ...result.rows.map((row) => names.map((n) => field(row[n])).join('\t')),
