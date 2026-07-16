@@ -102,6 +102,8 @@ function nextPage() {
     <div class="pager">
       <button :disabled="offset === 0" @click="prevPage">上一頁</button>
       <button :disabled="isLastPage" @click="nextPage">下一頁</button>
+      <!-- exports the currently loaded page - full-table export is a milestone C item -->
+      <ResultExport v-if="result && result.columns.length" :result="result" />
       <span v-if="result" class="meta">{{ offset + 1 }}–{{ offset + result.rows.length }} 列・{{ Math.round(result.executionMs) }} ms</span>
     </div>
   </div>

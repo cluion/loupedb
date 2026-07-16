@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { test, expect } from '@playwright/test'
 
 test('connect via form, browse schema tree and open a table', async ({ page }) => {
@@ -50,6 +51,15 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.keyboard.press('Shift+End')
   await page.getByRole('button', { name: '執行選取', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
+
+  // the loaded result downloads as a CSV file
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('.editor').getByRole('button', { name: '下載結果' }).click(),
+  ])
+  expect(download.suggestedFilename()).toMatch(/^loupedb-.+\.csv$/)
+  const csv = readFileSync((await download.path())!, 'utf8')
+  expect(csv).toBe('a\r\nfirst')
 
   // history drawer lists past executions, newest first, and reopens one in a new tab
   await page.getByRole('button', { name: '查詢歷史' }).click()

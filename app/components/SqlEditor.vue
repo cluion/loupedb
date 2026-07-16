@@ -75,6 +75,7 @@ async function run(target: RunnableSql | null = runnable.value) {
       <span v-if="queryResult" class="meta">
         {{ queryResult.rows.length }} 列・{{ Math.round(queryResult.executionMs) }} ms
       </span>
+      <ResultExport v-if="queryResult && queryResult.columns.length" :result="queryResult" />
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
     <div v-if="queryResult && queryResult.columns.length" class="scroll">
