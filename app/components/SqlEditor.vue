@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { QueryResult } from '#shared/types'
+import type { RunnableSql } from '../utils/sqlStatements'
 
 const props = withDefaults(defineProps<{
   connectionId: string
@@ -15,6 +16,9 @@ const sql = ref(props.modelValue)
 const queryResult = ref<QueryResult | null>(props.result)
 const error = ref<string | null>(null)
 const running = ref(false)
+// what ⌘⏎ / the run button would execute right now, reported by the editor:
+// the selection when one exists, otherwise the statement under the cursor
+const runnable = ref<RunnableSql | null>(null)
 
 watch(() => props.modelValue, (value) => {
   if (value !== sql.value) sql.value = value
@@ -27,14 +31,14 @@ function updateSql(value: string) {
   emit('update:modelValue', value)
 }
 
-async function run() {
+async function run(target: RunnableSql | null = runnable.value) {
   error.value = null
   queryResult.value = null
   emit('update:result', null)
   running.value = true
   // Resolve from the latest prop: rebinding a tab to another database must not
   // leave a closure executing against the previous connection id.
-  const r = await useQuery(props.connectionId).execute(sql.value)
+  const r = await useQuery(props.connectionId).execute(target?.sql ?? sql.value)
   running.value = false
   if (r.ok) {
     queryResult.value = r.data
@@ -46,10 +50,15 @@ async function run() {
 
 <template>
   <div class="editor">
-    <SqlCodeEditor :model-value="sql" @update:model-value="updateSql" @run="run" />
+    <SqlCodeEditor
+      :model-value="sql"
+      @update:model-value="updateSql"
+      @update:runnable="runnable = $event"
+      @run="run($event)"
+    />
     <div class="actions">
-      <button class="primary" :disabled="running" title="⌘⏎ / Ctrl+Enter" @click="run">
-        {{ running ? '執行中…' : '執行' }}
+      <button class="primary" :disabled="running" title="⌘⏎ / Ctrl+Enter" @click="run()">
+        {{ running ? '執行中…' : runnable?.source === 'selection' ? '執行選取' : '執行' }}
       </button>
       <span v-if="queryResult" class="meta">
         {{ queryResult.rows.length }} 列・{{ Math.round(queryResult.executionMs) }} ms

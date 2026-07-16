@@ -27,7 +27,7 @@ beforeEach(() => {
 // through a textarea stand-in; the e2e test exercises the real editor
 const SqlCodeEditorStub = {
   props: ['modelValue'],
-  emits: ['update:modelValue', 'run'],
+  emits: ['update:modelValue', 'update:runnable', 'run'],
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
 }
 const mountOpts = {
@@ -51,6 +51,41 @@ describe('SqlEditor', () => {
     expect(w.emitted('update:result')?.at(-1)?.[0]).toMatchObject({ rows: [{ one: 1 }] })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true)) // result rendered inline
     expect(w.find('tbody td').text()).toBe('1')
+  })
+
+  it('executes only the statement the editor reports under the cursor', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('textarea').setValue('select 1 as first;\nselect 2 as second;')
+    w.findComponent(SqlCodeEditorStub).vm.$emit('update:runnable', {
+      sql: 'select 2 as second;', from: 19, to: 38, source: 'statement',
+    })
+    await nextTick()
+    expect(w.find('button.primary').text()).toBe('執行')
+    await w.find('button.primary').trigger('click')
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
+    expect(executeMock.mock.calls[0]![0]).toBe('select 2 as second;')
+  })
+
+  it('runs the active selection and labels the button accordingly', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('textarea').setValue('select 1 as first;\nselect 2 as second;')
+    w.findComponent(SqlCodeEditorStub).vm.$emit('update:runnable', {
+      sql: 'select 1 as first;', from: 0, to: 18, source: 'selection',
+    })
+    await nextTick()
+    expect(w.find('button.primary').text()).toBe('執行選取')
+    await w.find('button.primary').trigger('click')
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
+    expect(executeMock.mock.calls[0]![0]).toBe('select 1 as first;')
+  })
+
+  it('executes the payload carried by the editor run event (Mod-Enter path)', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    w.findComponent(SqlCodeEditorStub).vm.$emit('run', {
+      sql: 'select 42 as answer;', from: 0, to: 20, source: 'statement',
+    })
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
+    expect(executeMock.mock.calls[0]![0]).toBe('select 42 as answer;')
   })
 
   it('shows error on failed execution and clears stale state', async () => {

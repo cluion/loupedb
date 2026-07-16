@@ -1,13 +1,41 @@
 <script setup lang="ts">
-import { EditorView, keymap } from '@codemirror/view'
+import { Decoration, EditorView, keymap, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { listSqlStatements, resolveRunnableSql, type RunnableSql } from '../utils/sqlStatements'
 
 const props = defineProps<{ modelValue: string }>()
-const emit = defineEmits<{ 'update:modelValue': [value: string]; run: [] }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: string]
+  'update:runnable': [runnable: RunnableSql | null]
+  run: [runnable: RunnableSql | null]
+}>()
+
+function runnableOf(state: EditorState): RunnableSql | null {
+  const sel = state.selection.main
+  return resolveRunnableSql(state.doc.toString(), sel.from, sel.to)
+}
+
+// with several statements in the draft, show which one ⌘⏎ would execute
+const currentStatement = Decoration.mark({ class: 'cm-current-statement' })
+function highlightCurrent(state: EditorState): DecorationSet {
+  const sel = state.selection.main
+  if (!sel.empty) return Decoration.none
+  const doc = state.doc.toString()
+  if (listSqlStatements(doc).length < 2) return Decoration.none
+  const r = resolveRunnableSql(doc, sel.from, sel.to)
+  return r ? Decoration.set([currentStatement.range(r.from, r.to)]) : Decoration.none
+}
+const statementHighlighter = ViewPlugin.fromClass(class {
+  decorations: DecorationSet
+  constructor(view: EditorView) { this.decorations = highlightCurrent(view.state) }
+  update(u: ViewUpdate) {
+    if (u.docChanged || u.selectionSet) this.decorations = highlightCurrent(u.state)
+  }
+}, { decorations: (v) => v.decorations })
 
 const host = ref<HTMLElement | null>(null)
 let view: EditorView | null = null
@@ -49,6 +77,7 @@ const loupeTheme = EditorView.theme({
     borderRight: '1px solid var(--line)',
   },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--brass)' },
+  '.cm-current-statement': { backgroundColor: 'rgba(127, 180, 201, 0.09)' }, // glass tint
 }, { dark: true })
 
 onMounted(() => {
@@ -58,17 +87,20 @@ onMounted(() => {
       doc: props.modelValue,
       extensions: [
         // before basicSetup so Mod-Enter wins over the default insert-newline
-        keymap.of([{ key: 'Mod-Enter', run: () => { emit('run'); return true } }]),
+        keymap.of([{ key: 'Mod-Enter', run: (v) => { emit('run', runnableOf(v.state)); return true } }]),
         basicSetup,
         sql({ dialect: PostgreSQL }),
         syntaxHighlighting(loupeHighlight),
         loupeTheme,
+        statementHighlighter,
         EditorView.updateListener.of((u) => {
           if (u.docChanged) emit('update:modelValue', u.state.doc.toString())
+          if (u.docChanged || u.selectionSet) emit('update:runnable', runnableOf(u.state))
         }),
       ],
     }),
   })
+  emit('update:runnable', runnableOf(view.state))
 })
 
 watch(() => props.modelValue, (v) => {

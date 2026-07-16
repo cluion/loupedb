@@ -36,6 +36,21 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '執行', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'lens', exact: true })).toBeVisible()
 
+  // with two statements, only the one under the cursor runs (fill leaves the
+  // cursor at the end, i.e. inside the second statement, which gets highlighted)
+  await page.locator('.cm-content').fill("select 'first' as a;\nselect 'second' as b;")
+  await expect(page.locator('.cm-current-statement').first()).toBeVisible()
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'second', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'first', exact: true })).not.toBeVisible()
+
+  // an explicit selection takes priority and relabels the run button
+  await page.locator('.cm-line').first().click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  await page.getByRole('button', { name: '執行選取', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
+
   // SQL tabs keep independent drafts and survive a full browser refresh
   await page.getByRole('button', { name: '新增 SQL 分頁' }).click()
   await page.locator('.cm-content').fill("select 'persisted draft' as note")
