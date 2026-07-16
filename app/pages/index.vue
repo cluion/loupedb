@@ -94,6 +94,7 @@ async function disconnect() {
       <section class="panel">
         <SqlWorkspace
           :workspace-id="currentConnectionId"
+          :history-label="currentConnectionName ?? currentConnectionId"
           :suggested-connection-id="activeConnId"
           :suggested-database="selected?.database ?? null"
           :suggested-schema="selected?.schema ?? null"

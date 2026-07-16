@@ -68,6 +68,13 @@ export interface DatabaseError {
   readonly retryable: boolean
 }
 
+export interface SavedQuery {
+  readonly name: string // unique key - saving under an existing name overwrites
+  readonly sql: string
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
 // unified API response envelope, shared by server routes and frontend composables
 export type Envelope<T> =
   | { readonly ok: true; readonly data: T }

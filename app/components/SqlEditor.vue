@@ -10,6 +10,12 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [sql: string]
   'update:result': [result: QueryResult | null]
+  executed: [outcome: {
+    sql: string
+    ok: boolean
+    durationMs: number | null
+    rowCount: number | null
+  }]
 }>()
 
 const sql = ref(props.modelValue)
@@ -38,13 +44,19 @@ async function run(target: RunnableSql | null = runnable.value) {
   running.value = true
   // Resolve from the latest prop: rebinding a tab to another database must not
   // leave a closure executing against the previous connection id.
-  const r = await useQuery(props.connectionId).execute(target?.sql ?? sql.value)
+  const executedSql = target?.sql ?? sql.value
+  const r = await useQuery(props.connectionId).execute(executedSql)
   running.value = false
   if (r.ok) {
     queryResult.value = r.data
     emit('update:result', r.data)
+    emit('executed', {
+      sql: executedSql, ok: true, durationMs: r.data.executionMs, rowCount: r.data.rows.length,
+    })
+  } else {
+    error.value = r.error.message
+    emit('executed', { sql: executedSql, ok: false, durationMs: null, rowCount: null })
   }
-  else error.value = r.error.message
 }
 </script>
 

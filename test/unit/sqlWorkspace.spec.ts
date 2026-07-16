@@ -1,7 +1,8 @@
 // @vitest-environment nuxt
-import { beforeEach, describe, expect, it } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import SqlWorkspace from '../../app/components/SqlWorkspace.vue'
+import { useQueryHistory } from '../../app/stores/queryHistory'
 import {
   addSqlTab,
   closeSqlTab,
@@ -71,14 +72,30 @@ describe('SQL workspace state', () => {
 
 const SqlEditorStub = {
   props: ['connectionId', 'modelValue', 'result'],
-  emits: ['update:modelValue', 'update:result'],
+  emits: ['update:modelValue', 'update:result', 'executed'],
   template: `<textarea aria-label="SQL draft" :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
+}
+
+const { listMock, saveMock, removeMock } = vi.hoisted(() => ({
+  listMock: vi.fn(async () => ({ ok: true as const, data: [] as unknown[] })),
+  saveMock: vi.fn(async () => ({ ok: true as const, data: {} })),
+  removeMock: vi.fn(async () => ({ ok: true as const, data: { deleted: true } })),
+}))
+mockNuxtImport('useSavedQueries', () => () => ({ list: listMock, save: saveMock, remove: removeMock }))
+
+const savedDaily = { name: 'daily', sql: 'select 9 as nine;', createdAt: 1, updatedAt: 2 }
+
+async function mountWorkspace(workspaceId: string, historyLabel: string) {
+  return await mountSuspended(SqlWorkspace, {
+    props: { workspaceId, historyLabel, suggestedConnectionId: 'root-1' },
+    global: { stubs: { SqlEditor: SqlEditorStub } },
+  })
 }
 
 describe('SqlWorkspace', () => {
   it('creates, switches, renames and preserves drafts across tabs', async () => {
     const w = await mountSuspended(SqlWorkspace, {
-      props: { workspaceId: 'workspace-tabs', suggestedConnectionId: 'root-1' },
+      props: { workspaceId: 'workspace-tabs', historyLabel: 'tabs', suggestedConnectionId: 'root-1' },
       global: { stubs: { SqlEditor: SqlEditorStub } },
     })
 
@@ -98,7 +115,7 @@ describe('SqlWorkspace', () => {
 
   it('updates only the active tab context when the selected database changes', async () => {
     const w = await mountSuspended(SqlWorkspace, {
-      props: { workspaceId: 'workspace-context', suggestedConnectionId: 'root-1' },
+      props: { workspaceId: 'workspace-context', historyLabel: 'ctx', suggestedConnectionId: 'root-1' },
       global: { stubs: { SqlEditor: SqlEditorStub } },
     })
     await w.get('[aria-label="新增 SQL 分頁"]').trigger('click')
@@ -108,5 +125,90 @@ describe('SqlWorkspace', () => {
     expect(w.get('[data-testid="sql-context"]').text()).toContain('appdb / public')
     expect(w.getComponent(SqlEditorStub).props('connectionId')).toBe('child-1')
     expect(w.findAll('[role="tab"]')[0]!.text()).toContain('root')
+  })
+})
+
+describe('SqlWorkspace history drawer', () => {
+  it('records editor executions and lists them in the drawer', async () => {
+    const w = await mountWorkspace('ws-hist-record', 'hist-record')
+    w.getComponent(SqlEditorStub).vm.$emit('executed', {
+      sql: 'select 7 as seven;', ok: true, durationMs: 12, rowCount: 1,
+    })
+    await nextTick()
+    await w.get('[aria-label="查詢歷史"]').trigger('click')
+    expect(w.text()).toContain('select 7 as seven;')
+    expect(useQueryHistory('hist-record').entries.value).toHaveLength(1)
+  })
+
+  it('opens a history entry in a new tab without touching the current draft', async () => {
+    useQueryHistory('hist-open').add({
+      sql: 'select 8 as eight;', database: 'appdb', durationMs: 4, rowCount: 1, ok: true,
+    })
+    const w = await mountWorkspace('ws-hist-open', 'hist-open')
+    await w.get('[aria-label="查詢歷史"]').trigger('click')
+    await w.get('[data-testid="history-entry"]').trigger('click')
+    expect(w.findAll('[role="tab"]')).toHaveLength(2)
+    expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('select 8 as eight;')
+  })
+
+  it('clears the history list', async () => {
+    useQueryHistory('hist-clear').add({
+      sql: 'select 1;', database: null, durationMs: 1, rowCount: 0, ok: true,
+    })
+    const w = await mountWorkspace('ws-hist-clear', 'hist-clear')
+    await w.get('[aria-label="查詢歷史"]').trigger('click')
+    await w.get('[aria-label="清空歷史"]').trigger('click')
+    expect(useQueryHistory('hist-clear').entries.value).toEqual([])
+  })
+})
+
+describe('SqlWorkspace saved queries drawer', () => {
+  beforeEach(() => {
+    listMock.mockClear()
+    saveMock.mockClear()
+    removeMock.mockClear()
+    listMock.mockResolvedValue({ ok: true, data: [savedDaily] })
+  })
+
+  it('saves the active tab under its title', async () => {
+    const w = await mountWorkspace('ws-saved-save', 'saved-save')
+    await w.get('textarea').setValue('select 5 as five;')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await w.get('[aria-label="儲存目前分頁"]').trigger('click')
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalled())
+    expect(saveMock).toHaveBeenCalledWith('Query 1', 'select 5 as five;')
+  })
+
+  it('opens a saved query in a new tab titled after it', async () => {
+    const w = await mountWorkspace('ws-saved-open', 'saved-open')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('daily'))
+    await w.get('[data-testid="saved-entry"]').trigger('click')
+    expect(w.findAll('[role="tab"]')).toHaveLength(2)
+    expect(w.get('[role="tab"][aria-selected="true"]').text()).toContain('daily')
+    expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('select 9 as nine;')
+  })
+
+  it('filters saved queries by the search box', async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      data: [savedDaily, { name: 'weekly rollup', sql: 'select 2;', createdAt: 1, updatedAt: 1 }],
+    })
+    const w = await mountWorkspace('ws-saved-search', 'saved-search')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('weekly rollup'))
+    await w.get('[aria-label="搜尋已存查詢"]').setValue('daily')
+    expect(w.text()).toContain('daily')
+    expect(w.text()).not.toContain('weekly rollup')
+  })
+
+  it('deletes a saved query only after a second confirming click', async () => {
+    const w = await mountWorkspace('ws-saved-delete', 'saved-delete')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('daily'))
+    await w.get('[aria-label="刪除 daily"]').trigger('click')
+    expect(removeMock).not.toHaveBeenCalled()
+    await w.get('[aria-label="確認刪除 daily"]').trigger('click')
+    await vi.waitFor(() => expect(removeMock).toHaveBeenCalledWith('daily'))
   })
 })

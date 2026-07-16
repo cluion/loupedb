@@ -88,6 +88,28 @@ describe('SqlEditor', () => {
     expect(executeMock.mock.calls[0]![0]).toBe('select 42 as answer;')
   })
 
+  it('reports a successful execution for history recording', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('textarea').setValue('select 1 as one')
+    await w.find('button').trigger('click')
+    await vi.waitFor(() => expect(w.emitted('executed')).toBeTruthy())
+    expect(w.emitted('executed')![0]![0]).toEqual({
+      sql: 'select 1 as one', ok: true, durationMs: 3, rowCount: 1,
+    })
+  })
+
+  it('reports a failed execution with null duration and row count', async () => {
+    executeMock.mockResolvedValueOnce({
+      ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },
+    } as never)
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('button').trigger('click')
+    await vi.waitFor(() => expect(w.emitted('executed')).toBeTruthy())
+    expect(w.emitted('executed')![0]![0]).toEqual({
+      sql: 'SELECT * FROM ', ok: false, durationMs: null, rowCount: null,
+    })
+  })
+
   it('shows error on failed execution and clears stale state', async () => {
     executeMock.mockResolvedValueOnce({
       ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },

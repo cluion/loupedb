@@ -51,6 +51,19 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '執行選取', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
 
+  // history drawer lists past executions, newest first, and reopens one in a new tab
+  await page.getByRole('button', { name: '查詢歷史' }).click()
+  await expect(page.getByTestId('history-entry').first()).toContainText("select 'first' as a")
+  const tabsBefore = await page.getByRole('tab').count()
+  await page.getByTestId('history-entry').first().click()
+  await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1)
+  await expect(page.locator('.cm-content')).toContainText("select 'first' as a")
+
+  // save the current tab as a named query on the server
+  await page.getByRole('button', { name: '已存查詢' }).click()
+  await page.getByRole('button', { name: '儲存目前分頁' }).click()
+  await expect(page.getByTestId('saved-entry')).toContainText('Query 2')
+
   // SQL tabs keep independent drafts and survive a full browser refresh
   await page.getByRole('button', { name: '新增 SQL 分頁' }).click()
   await page.locator('.cm-content').fill("select 'persisted draft' as note")
@@ -64,6 +77,12 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   ])
   await expect(page.getByRole('tab', { name: /Report draft/, selected: true })).toBeVisible()
   await expect(page.locator('.cm-content')).toContainText("select 'persisted draft' as note")
+
+  // saved queries live on the server, so they also survive the refresh
+  await page.getByRole('button', { name: '已存查詢' }).click()
+  await expect(page.getByTestId('saved-entry')).toContainText('Query 2')
+  await page.getByTestId('saved-entry').first().click()
+  await expect(page.getByRole('tab', { name: /Query 2/, selected: true })).toBeVisible()
 
   // header shows the connection name, and disconnect returns to the lens screen
   await expect(page.getByText('e2e', { exact: true })).toBeVisible()

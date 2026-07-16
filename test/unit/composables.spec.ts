@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useConnections } from '../../app/composables/useConnections'
 import { useSchema } from '../../app/composables/useSchema'
 import { useQuery } from '../../app/composables/useQuery'
+import { useSavedQueries } from '../../app/composables/useSavedQueries'
 
 const fetchMock = vi.fn(async () => ({ ok: true, data: null }))
 beforeEach(() => {
@@ -85,5 +86,24 @@ describe('useQuery', () => {
   it('streamUrl carries queryId so server-side cancel can find the stream', () => {
     const url = useQuery('c1').streamUrl('public', 'logs', 'sq1', 50)
     expect(url).toBe('/api/connections/c1/stream?schema=public&table=logs&queryId=sq1&batchSize=50')
+  })
+})
+
+describe('useSavedQueries', () => {
+  it('list gets /api/saved-queries', async () => {
+    await useSavedQueries().list()
+    expect(fetchMock).toHaveBeenCalledWith('/api/saved-queries')
+  })
+
+  it('save posts name and sql', async () => {
+    await useSavedQueries().save('daily', 'select 1;')
+    expect(fetchMock).toHaveBeenCalledWith('/api/saved-queries', {
+      method: 'POST', body: { name: 'daily', sql: 'select 1;' },
+    })
+  })
+
+  it('remove deletes with encoded name', async () => {
+    await useSavedQueries().remove('my query')
+    expect(fetchMock).toHaveBeenCalledWith('/api/saved-queries/my%20query', { method: 'DELETE' })
   })
 })
