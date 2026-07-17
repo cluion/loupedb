@@ -10,9 +10,10 @@ export interface SqlTab extends SqlTabContext {
   readonly id: string
   readonly title: string
   readonly sql: string
-  // Results stay in memory while switching tabs, but are deliberately omitted
-  // from localStorage because database rows may contain sensitive data.
+  // Current and previous results stay in memory while switching tabs, but are
+  // deliberately omitted from localStorage because rows may be sensitive.
   readonly result: SqlExecutionResult | null
+  readonly previousResult: SqlExecutionResult | null
 }
 
 export interface SqlWorkspaceState {
@@ -20,7 +21,10 @@ export interface SqlWorkspaceState {
   readonly activeTabId: string
 }
 
-type SqlTabPatch = Partial<Pick<SqlTab, 'sql' | 'result' | 'connectionId' | 'database' | 'schema'>>
+type SqlTabPatch = Partial<Pick<
+  SqlTab,
+  'sql' | 'result' | 'previousResult' | 'connectionId' | 'database' | 'schema'
+>>
 
 const DEFAULT_SQL = 'SELECT * FROM '
 const STORAGE_PREFIX = 'loupedb:sql-workspace:v1:'
@@ -37,7 +41,7 @@ function nextTitle(tabs: ReadonlyArray<SqlTab>): string {
 }
 
 function createTab(context: SqlTabContext, id: string, title: string): SqlTab {
-  return { id, title, sql: DEFAULT_SQL, result: null, ...context }
+  return { id, title, sql: DEFAULT_SQL, result: null, previousResult: null, ...context }
 }
 
 export function createSqlWorkspace(context: SqlTabContext, id = createId()): SqlWorkspaceState {
@@ -90,7 +94,7 @@ export function closeSqlTab(
 export function serializeSqlWorkspace(state: SqlWorkspaceState): string {
   return JSON.stringify({
     activeTabId: state.activeTabId,
-    tabs: state.tabs.map(({ result: _result, ...draft }) => draft),
+    tabs: state.tabs.map(({ result: _result, previousResult: _previousResult, ...draft }) => draft),
   })
 }
 
@@ -115,7 +119,7 @@ export function restoreSqlWorkspace(raw: string, fallbackContext: SqlTabContext)
         : fallbackContext.connectionId
       tabs.push({
         id: tab.id, title: tab.title, sql: tab.sql, connectionId,
-        database, schema, result: null,
+        database, schema, result: null, previousResult: null,
       })
     }
     const requestedActive = typeof parsed.activeTabId === 'string' ? parsed.activeTabId : ''
@@ -169,7 +173,7 @@ export function useSqlWorkspace(workspaceId: string, initialContext: SqlTabConte
     closeTab: (id: string, context: SqlTabContext) => { state.value = closeSqlTab(state.value, id, context) },
     setActiveContext: (context: SqlTabContext) => {
       const id = state.value.activeTabId
-      state.value = updateSqlTab(state.value, id, { ...context, result: null })
+      state.value = updateSqlTab(state.value, id, { ...context, result: null, previousResult: null })
     },
   }
 }

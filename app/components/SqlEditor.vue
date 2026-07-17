@@ -11,11 +11,18 @@ const props = withDefaults(defineProps<{
   connectionId: string
   modelValue?: string
   result?: SqlExecutionResult | null
+  previousResult?: SqlExecutionResult | null
   defaultSchema?: string | null
-}>(), { modelValue: 'SELECT * FROM ', result: null, defaultSchema: null })
+}>(), {
+  modelValue: 'SELECT * FROM ',
+  result: null,
+  previousResult: null,
+  defaultSchema: null,
+})
 const emit = defineEmits<{
   'update:modelValue': [sql: string]
   'update:result': [result: SqlExecutionResult | null]
+  'execution-started': []
   executed: [outcome: {
     sql: string
     status: 'success' | 'error' | 'cancelled'
@@ -54,6 +61,8 @@ interface SqlCodeEditorHandle {
 const sql = ref(props.modelValue)
 const codeEditor = ref<SqlCodeEditorHandle | null>(null)
 const queryOutput = ref<SqlExecutionResult | null>(props.result)
+const previousQueryOutput = ref<SqlExecutionResult | null>(props.previousResult)
+const resultVersion = ref<'current' | 'previous'>('current')
 const activeScriptIndex = ref(0)
 const error = ref<string | null>(null)
 const formatError = ref<string | null>(null)
@@ -65,15 +74,18 @@ let activeRun: ActiveRun | null = null
 // the selection when one exists, otherwise the statement under the cursor
 const runnable = ref<RunnableSql | null>(null)
 const statementCount = computed(() => listSqlStatements(sql.value).length)
+const visibleOutput = computed<SqlExecutionResult | null>(() => (
+  resultVersion.value === 'previous' ? previousQueryOutput.value : queryOutput.value
+))
 const scriptResult = computed<ScriptExecutionResult | null>(() => {
-  const result = queryOutput.value
+  const result = visibleOutput.value
   return result && 'kind' in result && result.kind === 'script' ? result : null
 })
 const activeScriptStatement = computed<ScriptStatementResult | null>(
   () => scriptResult.value?.statements[activeScriptIndex.value] ?? null,
 )
 const queryResult = computed<QueryResult | null>(() => {
-  const result = queryOutput.value
+  const result = visibleOutput.value
   if (!result) return null
   if (!('kind' in result)) return result
   const statement = activeScriptStatement.value
@@ -89,9 +101,13 @@ watch(() => props.result, (value) => {
     activeScriptIndex.value = 0
   }
 })
+watch(() => props.previousResult, (value) => {
+  if (value !== previousQueryOutput.value) previousQueryOutput.value = value
+})
 watch(() => props.connectionId, () => {
   error.value = null
   formatError.value = null
+  resultVersion.value = 'current'
 })
 
 // completion metadata for the bound connection - loads lazily, cached per id
@@ -143,10 +159,12 @@ function finish(run: ActiveRun, summary: ExecutionSummary): void {
 function beginRun(executedSql: string): ActiveRun | null {
   if (activeRun) return null
   error.value = null
+  if (queryOutput.value) previousQueryOutput.value = queryOutput.value
   queryOutput.value = null
+  resultVersion.value = 'current'
   activeScriptIndex.value = 0
   lastExecution.value = null
-  emit('update:result', null)
+  emit('execution-started')
   const runState: ActiveRun = {
     queryId: createQueryId(),
     connectionId: props.connectionId,
@@ -287,6 +305,19 @@ function statementCommand(statement: ScriptStatementResult): string {
   if (statement.status === 'success' && statement.result.command) return statement.result.command
   return statement.sql.match(/^\s*([a-z]+)/i)?.[1]?.toUpperCase() ?? 'SQL'
 }
+
+function resultLabel(result: SqlExecutionResult | null): string {
+  if (!result) return '無結果'
+  if ('kind' in result) return `${result.statements.length} 個結果`
+  if (result.columns.length) return `${result.rowCount ?? result.rows.length} 列`
+  if (result.affectedRows !== undefined) return `${result.affectedRows} 列受影響`
+  return result.command ?? '完成'
+}
+
+function showResultVersion(version: 'current' | 'previous') {
+  resultVersion.value = version
+  activeScriptIndex.value = 0
+}
 </script>
 
 <template>
@@ -345,8 +376,29 @@ function statementCommand(statement: ScriptStatementResult): string {
       </span>
       <ResultExport v-if="queryResult && queryResult.columns.length" :result="queryResult" />
     </div>
+    <div
+      v-if="previousQueryOutput"
+      class="result-versions"
+      role="tablist"
+      aria-label="結果版本"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-label="顯示目前結果"
+        :aria-selected="resultVersion === 'current'"
+        @click="showResultVersion('current')"
+      >目前結果 <small>{{ resultLabel(queryOutput) }}</small></button>
+      <button
+        type="button"
+        role="tab"
+        aria-label="顯示前次結果"
+        :aria-selected="resultVersion === 'previous'"
+        @click="showResultVersion('previous')"
+      >前次結果 <small>{{ resultLabel(previousQueryOutput) }}</small></button>
+    </div>
     <p v-if="formatError" role="alert" data-testid="format-error">{{ formatError }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
+    <p v-if="error && resultVersion === 'current'" role="alert">{{ error }}</p>
     <div v-if="scriptResult" class="script-results">
       <div class="result-tabs" role="tablist" aria-label="Script 結果">
         <button
@@ -398,6 +450,10 @@ function statementCommand(statement: ScriptStatementResult): string {
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 .stop { border-color: var(--danger); color: var(--danger); }
 .stop:hover { border-color: var(--danger); background: rgba(224, 108, 94, 0.1); }
+.result-versions { display: flex; gap: 6px; }
+.result-versions button { display: flex; align-items: baseline; gap: 8px; }
+.result-versions button[aria-selected="true"] { border-color: var(--brass); color: var(--brass); }
+.result-versions small { color: var(--muted); font-family: var(--font-data); }
 .script-results { display: flex; flex-direction: column; gap: 8px; }
 .result-tabs { display: flex; gap: 6px; overflow-x: auto; }
 .result-tab { font-family: var(--font-data); font-size: 12px; white-space: nowrap; }

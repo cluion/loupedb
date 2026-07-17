@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **前次結果比對**：每個 SQL 分頁在新一次執行時保留上一份結果，可在目前／前次結果間切換並查看各自列數；一般查詢與完整 script 都適用，兩份結果只留在記憶體且不寫入 localStorage
+
 ## [0.5.0] - 2026-07-17
 
 ### Added

@@ -70,6 +70,15 @@ function updateResult(id: string, result: SqlExecutionResult | null) {
   workspace.updateTab(id, { result })
 }
 
+function startExecution(id: string) {
+  const tab = workspace.state.value.tabs.find((candidate) => candidate.id === id)
+  if (!tab) return
+  workspace.updateTab(id, {
+    result: null,
+    previousResult: tab.result ?? tab.previousResult,
+  })
+}
+
 // --- history / saved queries drawer ---
 
 const history = useQueryHistory(props.historyLabel)
@@ -225,9 +234,11 @@ function timeLabel(at: number): string {
         :connection-id="workspace.activeTab.value.connectionId"
         :model-value="workspace.activeTab.value.sql"
         :result="workspace.activeTab.value.result"
+        :previous-result="workspace.activeTab.value.previousResult"
         :default-schema="workspace.activeTab.value.schema"
         @update:model-value="workspace.updateTab(workspace.activeTab.value!.id, { sql: $event })"
         @update:result="updateResult(workspace.activeTab.value!.id, $event)"
+        @execution-started="startExecution(workspace.activeTab.value!.id)"
         @executed="onExecuted"
       />
 

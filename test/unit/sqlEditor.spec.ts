@@ -73,6 +73,34 @@ describe('SqlEditor', () => {
     expect(w.find('tbody td').text()).toBe('1')
   })
 
+  it('keeps the prior result available after the next successful execution', async () => {
+    const previous = {
+      columns: [{ name: 'value', nativeType: 'text', type: 'string' as const, nullable: true }],
+      rows: [{ value: 'before' }], rowCount: 1, executionMs: 2,
+    }
+    executeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        columns: [{ name: 'value', nativeType: 'text', type: 'string', nullable: true }],
+        rows: [{ value: 'after' }], rowCount: 1, executionMs: 3,
+      },
+    })
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, result: previous },
+    })
+
+    await w.get('button.primary').trigger('click')
+    await vi.waitFor(() => expect(w.get('tbody td').text()).toBe('after'))
+    expect(w.get('[aria-label="顯示目前結果"]').attributes('aria-selected')).toBe('true')
+    expect(w.get('[aria-label="顯示前次結果"]').text()).toContain('1 列')
+
+    await w.get('[aria-label="顯示前次結果"]').trigger('click')
+    expect(w.get('tbody td').text()).toBe('before')
+    await w.get('[aria-label="顯示目前結果"]').trigger('click')
+    expect(w.get('tbody td').text()).toBe('after')
+  })
+
   it('executes only the statement the editor reports under the cursor', async () => {
     const w = await mountSuspended(SqlEditor, mountOpts)
     await w.find('textarea').setValue('select 1 as first;\nselect 2 as second;')
@@ -279,7 +307,7 @@ describe('SqlEditor', () => {
     })
   })
 
-  it('shows error on failed execution and clears stale state', async () => {
+  it('shows an error while keeping the last result as the previous version', async () => {
     executeMock.mockResolvedValueOnce({
       ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },
     } as never)
@@ -287,12 +315,20 @@ describe('SqlEditor', () => {
       ...mountOpts,
       props: {
         ...mountOpts.props,
-        result: { columns: [], rows: [{ stale: true }], executionMs: 1 },
+        result: {
+          columns: [{ name: 'stale', nativeType: 'bool', type: 'boolean', nullable: true }],
+          rows: [{ stale: true }], rowCount: 1, executionMs: 1,
+        },
       },
     })
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(w.find('[role="alert"]').exists()).toBe(true))
     expect(w.find('[role="alert"]').text()).toContain('no such table')
-    expect(w.emitted('update:result')?.[0]).toEqual([null])
+    expect(w.emitted('execution-started')).toHaveLength(1)
+    expect(w.find('table').exists()).toBe(false)
+
+    await w.get('[aria-label="顯示前次結果"]').trigger('click')
+    expect(w.find('table').exists()).toBe(true)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
   })
 })

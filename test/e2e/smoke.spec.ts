@@ -103,6 +103,13 @@ WHERE
   await page.getByRole('button', { name: '執行選取', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
 
+  // every SQL tab keeps one prior result in memory for quick comparison
+  await expect(page.getByRole('tab', { name: '顯示目前結果' })).toBeVisible()
+  await page.getByRole('tab', { name: '顯示前次結果' }).click()
+  await expect(page.getByRole('cell', { name: 'second', exact: true })).toBeVisible()
+  await page.getByRole('tab', { name: '顯示目前結果' }).click()
+  await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
+
   // complete scripts run sequentially and expose each result or command in tabs
   await page.locator('.cm-content').fill(`select 'script first' as step;
 update items set label = label where id = 1;
@@ -167,9 +174,10 @@ select 'never runs' as step;`)
   await page.getByRole('button', { name: '查詢歷史' }).click()
   await expect(page.getByTestId('history-entry').first()).toContainText("select 'first' as a")
   await expect(page.getByTestId('history-entry').filter({ hasText: 'select pg_sleep(10)' }).first()).toContainText('已取消')
-  const tabsBefore = await page.getByRole('tab').count()
+  const sqlTabs = page.getByRole('tablist', { name: 'SQL 分頁' }).getByRole('tab')
+  const tabsBefore = await sqlTabs.count()
   await page.getByTestId('history-entry').first().click()
-  await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1)
+  await expect(sqlTabs).toHaveCount(tabsBefore + 1)
   await expect(page.locator('.cm-content')).toContainText("select 'first' as a")
 
   // save the current tab as a named query on the server

@@ -54,13 +54,16 @@ describe('SQL workspace state', () => {
     const state = updateSqlTab(createSqlWorkspace(app, 'tab-1'), 'tab-1', {
       sql: 'select secret from users',
       result: { columns: [], rows: [{ secret: 'do-not-persist' }], executionMs: 2 },
+      previousResult: { columns: [], rows: [{ secret: 'also-do-not-persist' }], executionMs: 1 },
     })
     const raw = serializeSqlWorkspace(state)
     expect(raw).not.toContain('do-not-persist')
+    expect(raw).not.toContain('also-do-not-persist')
 
     const restored = restoreSqlWorkspace(raw, root)
     expect(restored?.tabs[0]).toMatchObject({
-      sql: 'select secret from users', connectionId: 'child-1', database: 'appdb', result: null,
+      sql: 'select secret from users', connectionId: 'child-1', database: 'appdb',
+      result: null, previousResult: null,
     })
   })
 
@@ -71,8 +74,8 @@ describe('SQL workspace state', () => {
 })
 
 const SqlEditorStub = {
-  props: ['connectionId', 'modelValue', 'result'],
-  emits: ['update:modelValue', 'update:result', 'executed'],
+  props: ['connectionId', 'modelValue', 'result', 'previousResult'],
+  emits: ['update:modelValue', 'update:result', 'execution-started', 'executed'],
   template: `<textarea aria-label="SQL draft" :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
 }
 
@@ -125,6 +128,28 @@ describe('SqlWorkspace', () => {
     expect(w.get('[data-testid="sql-context"]').text()).toContain('appdb / public')
     expect(w.getComponent(SqlEditorStub).props('connectionId')).toBe('child-1')
     expect(w.findAll('[role="tab"]')[0]!.text()).toContain('root')
+  })
+
+  it('keeps the current and previous result independently in each tab', async () => {
+    const w = await mountWorkspace('workspace-results', 'results')
+    const first = { columns: [], rows: [{ value: 'first' }], executionMs: 2 }
+    const second = { columns: [], rows: [{ value: 'second' }], executionMs: 3 }
+    let editor = w.getComponent(SqlEditorStub)
+
+    editor.vm.$emit('update:result', first)
+    await nextTick()
+    editor.vm.$emit('execution-started')
+    await nextTick()
+    editor = w.getComponent(SqlEditorStub)
+    expect(editor.props('result')).toBeNull()
+    expect(editor.props('previousResult')).toEqual(first)
+
+    editor.vm.$emit('update:result', second)
+    await w.get('[aria-label="新增 SQL 分頁"]').trigger('click')
+    await w.findAll('[role="tab"]')[0]!.trigger('click')
+    editor = w.getComponent(SqlEditorStub)
+    expect(editor.props('result')).toEqual(second)
+    expect(editor.props('previousResult')).toEqual(first)
   })
 })
 
