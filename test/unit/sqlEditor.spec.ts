@@ -67,7 +67,8 @@ describe('SqlEditor', () => {
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 1 as one')
-    expect(executeMock.mock.calls[0]![1]).toEqual(expect.any(String))
+    expect(executeMock.mock.calls[0]![1]).toEqual([])
+    expect(executeMock.mock.calls[0]![2]).toEqual(expect.any(String))
     expect(w.emitted('update:result')?.at(-1)?.[0]).toMatchObject({ rows: [{ one: 1 }] })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true)) // result rendered inline
     expect(w.find('tbody td').text()).toBe('1')
@@ -121,6 +122,37 @@ describe('SqlEditor', () => {
     expect(w.get('[data-testid="query-messages"]').text()).toContain('詳細：12 rows checked')
     expect(w.get('[data-testid="query-messages"]').text()).toContain('WARNING')
     expect(w.get('[data-testid="query-messages"]').text()).toContain('提示：check the index')
+  })
+
+  it('collects positional parameters before executing the current statement', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('textarea').setValue('select $1::text as label, $3::int as amount, $4::text as optional')
+    await w.get('button.primary').trigger('click')
+
+    expect(executeMock).not.toHaveBeenCalled()
+    expect(w.get('[role="dialog"]').text()).toContain('查詢參數')
+    expect(w.find('[aria-label="參數 $2"]').exists()).toBe(false)
+    await w.get('[aria-label="參數 $1"]').setValue('bound value')
+    await w.get('[aria-label="參數 $3"]').setValue('42')
+    await w.get('[aria-label="參數 $4 使用 NULL"]').setValue(true)
+    await w.get('button[type="submit"]').trigger('submit')
+
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
+    expect(executeMock.mock.calls[0]![0]).toContain('$1::text')
+    expect(executeMock.mock.calls[0]![1]).toEqual(['bound value', null, '42', null])
+    expect(executeMock.mock.calls[0]![2]).toEqual(expect.any(String))
+  })
+
+  it('cancels parameter entry without executing and rejects parameters in a complete script', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('textarea').setValue('select $1; select 2;')
+    await w.get('button.primary').trigger('click')
+    await w.get('[aria-label="關閉查詢參數"]').trigger('click')
+    expect(executeMock).not.toHaveBeenCalled()
+
+    await w.get('[aria-label="執行完整 Script"]').trigger('click')
+    expect(w.get('[role="alert"]').text()).toContain('完整 Script 暫不支援參數')
+    expect(executeScriptMock).not.toHaveBeenCalled()
   })
 
   it('executes only the statement the editor reports under the cursor', async () => {
@@ -309,7 +341,7 @@ describe('SqlEditor', () => {
 
     await w.find('button.primary').trigger('click')
     await vi.waitFor(() => expect(w.get('[aria-label="停止查詢"]').text()).toBe('停止'))
-    const queryId = executeMock.mock.calls[0]![1] as string
+    const queryId = executeMock.mock.calls[0]![2] as string
     await w.get('[aria-label="停止查詢"]').trigger('click')
     expect(cancelMock).toHaveBeenCalledWith(queryId)
     await vi.waitFor(() => expect(w.get('[aria-label="停止查詢"]').text()).toBe('取消中…'))

@@ -2,9 +2,9 @@ import type { BrowseOpts, Envelope, QueryResult, ScriptExecutionResult } from '#
 
 export function useQuery(connId: string) {
   return {
-    async execute(sql: string, queryId?: string) {
+    async execute(sql: string, params: ReadonlyArray<unknown> = [], queryId?: string) {
       return await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
-        method: 'POST', body: { sql, queryId },
+        method: 'POST', body: { sql, params, queryId },
       })
     },
     async executeScript(sql: string, queryId?: string) {

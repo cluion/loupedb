@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Query Parameters**：執行含 `$1`、`$2` 等 PostgreSQL placeholder 的目前 statement 或選取 SQL 前顯示參數表單，支援空字串與明確 `NULL`，並以 bind values 傳送而不拼接 SQL；字串、dollar-quote、註解與 quoted identifier 內的 `$n` 不會誤判，參數值不寫入歷史或 localStorage
+
 ## [0.6.0] - 2026-07-17
 
 ### Added

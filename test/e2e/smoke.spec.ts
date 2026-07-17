@@ -99,6 +99,20 @@ end $$;`)
   await expect(page.getByTestId('query-messages')).toContainText('WARNING')
   await expect(page.getByTestId('query-messages')).toContainText('using fallback')
 
+  // positional parameters are collected before execution and never interpolated into SQL
+  await page.locator('.cm-content').fill(
+    'select $1::text as label, $2::int as amount, $3::text is null as was_null',
+  )
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '查詢參數' })).toBeVisible()
+  await page.getByRole('textbox', { name: '參數 $1' }).fill('bound value')
+  await page.getByRole('textbox', { name: '參數 $2' }).fill('42')
+  await page.getByRole('checkbox', { name: '參數 $3 使用 NULL' }).check()
+  await page.getByRole('button', { name: '使用參數執行' }).click()
+  await expect(page.getByRole('cell', { name: 'bound value', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: '42', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'true', exact: true })).toBeVisible()
+
   // with two statements, only the one under the cursor runs (fill leaves the
   // cursor at the end, i.e. inside the second statement, which gets highlighted)
   await page.locator('.cm-content').fill("select 'first' as a;\nselect 'second' as b;")

@@ -6,7 +6,10 @@ import type {
   ScriptStatementResult,
   SqlExecutionResult,
 } from '#shared/types'
+import { listSqlParameterPositions } from '#shared/sqlParameters'
 import { listSqlStatements, type RunnableSql } from '../utils/sqlStatements'
+
+const MAX_QUERY_PARAMETER_POSITION = 65535
 
 const props = withDefaults(defineProps<{
   connectionId: string
@@ -59,6 +62,17 @@ interface SqlCodeEditorHandle {
   formatSql: () => boolean
 }
 
+interface QueryParameterInput {
+  readonly position: number
+  value: string
+  isNull: boolean
+}
+
+interface QueryParameterDialog {
+  readonly sql: string
+  readonly inputs: QueryParameterInput[]
+}
+
 const sql = ref(props.modelValue)
 const codeEditor = ref<SqlCodeEditorHandle | null>(null)
 const queryOutput = ref<SqlExecutionResult | null>(props.result)
@@ -68,10 +82,15 @@ const activeScriptIndex = ref(0)
 const error = ref<string | null>(null)
 const failedMessages = ref<ReadonlyArray<QueryMessage>>([])
 const formatError = ref<string | null>(null)
+const parameterDialog = ref<QueryParameterDialog | null>(null)
 const running = ref(false)
 const cancelling = ref(false)
 const lastExecution = ref<ExecutionSummary | null>(null)
 let activeRun: ActiveRun | null = null
+let lastParameterizedRun: {
+  readonly sql: string
+  readonly values: ReadonlyMap<number, Pick<QueryParameterInput, 'value' | 'isNull'>>
+} | null = null
 // what ⌘⏎ / the run button would execute right now, reported by the editor:
 // the selection when one exists, otherwise the statement under the cursor
 const runnable = ref<RunnableSql | null>(null)
@@ -120,6 +139,7 @@ watch(() => props.connectionId, () => {
   error.value = null
   failedMessages.value = []
   formatError.value = null
+  parameterDialog.value = null
   resultVersion.value = 'current'
 })
 
@@ -210,14 +230,56 @@ function failRun(
   })
 }
 
-async function run(target: RunnableSql | null = runnable.value) {
+function run(target: RunnableSql | null = runnable.value) {
   // Mod-Enter can still emit while the button is disabled; never overlap two
   // requests inside one editor instance.
   const executedSql = target?.sql ?? sql.value
+  if (activeRun) return
+  const positions = listSqlParameterPositions(executedSql)
+  const maxPosition = positions.at(-1) ?? 0
+  if (maxPosition > MAX_QUERY_PARAMETER_POSITION) {
+    error.value = `參數 $${maxPosition} 超過 PostgreSQL 上限 $${MAX_QUERY_PARAMETER_POSITION}`
+    return
+  }
+  if (positions.length) {
+    const remembered = lastParameterizedRun?.sql === executedSql ? lastParameterizedRun.values : null
+    parameterDialog.value = {
+      sql: executedSql,
+      inputs: positions.map((position) => ({
+        position,
+        value: remembered?.get(position)?.value ?? '',
+        isNull: remembered?.get(position)?.isNull ?? false,
+      })),
+    }
+    return
+  }
+  return executeRun(executedSql, [])
+}
+
+async function submitParameters() {
+  const dialog = parameterDialog.value
+  if (!dialog) return
+  const maxPosition = dialog.inputs.at(-1)?.position ?? 0
+  const params: unknown[] = Array.from({ length: maxPosition }, () => null)
+  const remembered = new Map<number, Pick<QueryParameterInput, 'value' | 'isNull'>>()
+  for (const input of dialog.inputs) {
+    params[input.position - 1] = input.isNull ? null : input.value
+    remembered.set(input.position, { value: input.value, isNull: input.isNull })
+  }
+  lastParameterizedRun = { sql: dialog.sql, values: remembered }
+  parameterDialog.value = null
+  await executeRun(dialog.sql, params)
+}
+
+function cancelParameters() {
+  parameterDialog.value = null
+}
+
+async function executeRun(executedSql: string, params: ReadonlyArray<unknown>) {
   const runState = beginRun(executedSql)
   if (!runState) return
   try {
-    const r = await useQuery(runState.connectionId).execute(runState.sql, runState.queryId)
+    const r = await useQuery(runState.connectionId).execute(runState.sql, params, runState.queryId)
     // A future flow may allow a new request immediately after cancellation.
     // Guard now so a late response can never overwrite the newer result.
     if (activeRun !== runState) return
@@ -260,6 +322,10 @@ function scriptCounts(result: ScriptExecutionResult): Pick<ExecutionSummary, 'ro
 }
 
 async function runScript() {
+  if (listSqlParameterPositions(sql.value).length) {
+    error.value = '完整 Script 暫不支援參數；請執行選取範圍或游標所在 statement'
+    return
+  }
   const runState = beginRun(sql.value)
   if (!runState) return
   try {
@@ -353,6 +419,50 @@ function showResultVersion(version: 'current' | 'previous') {
       @formatted="onFormatted"
       @format-error="onFormatError"
     />
+    <div
+      v-if="parameterDialog"
+      class="parameter-backdrop"
+      @click.self="cancelParameters"
+    >
+      <form
+        class="parameter-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="查詢參數"
+        @submit.prevent="submitParameters"
+        @keydown.esc.prevent="cancelParameters"
+      >
+        <div class="parameter-head">
+          <div>
+            <strong>查詢參數</strong>
+            <p>值以文字傳送；需要特定型別時請在 SQL 中加上 cast</p>
+          </div>
+          <button type="button" class="close" aria-label="關閉查詢參數" @click="cancelParameters">×</button>
+        </div>
+        <label v-for="(input, index) in parameterDialog.inputs" :key="input.position" class="parameter-row">
+          <code>${{ input.position }}</code>
+          <input
+            v-model="input.value"
+            type="text"
+            :aria-label="`參數 $${input.position}`"
+            :disabled="input.isNull"
+            :autofocus="index === 0"
+            autocomplete="off"
+          >
+          <span class="null-toggle">
+            <input
+              v-model="input.isNull"
+              type="checkbox"
+              :aria-label="`參數 $${input.position} 使用 NULL`"
+            > NULL
+          </span>
+        </label>
+        <div class="parameter-actions">
+          <button type="button" @click="cancelParameters">取消</button>
+          <button type="submit" class="primary">使用參數執行</button>
+        </div>
+      </form>
+    </div>
     <div class="actions">
       <button v-if="!running" class="primary" title="⌘⏎ / Ctrl+Enter" @click="run()">
         {{ runnable?.source === 'selection' ? '執行選取' : '執行' }}
@@ -479,6 +589,34 @@ function showResultVersion(version: 'current' | 'previous') {
 
 <style scoped>
 .editor { display: flex; flex-direction: column; gap: 10px; }
+.parameter-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 14, 18, 0.72);
+}
+.parameter-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(560px, 100%);
+  max-height: min(680px, calc(100vh - 40px));
+  overflow-y: auto;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+.parameter-head, .parameter-actions, .parameter-row { display: flex; align-items: center; gap: 10px; }
+.parameter-head { justify-content: space-between; }
+.parameter-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.parameter-row > code { width: 36px; color: var(--brass); }
+.parameter-row > input[type="text"] { min-width: 0; flex: 1; }
+.null-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.parameter-actions { justify-content: flex-end; }
 .actions { display: flex; align-items: center; gap: 12px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 .stop { border-color: var(--danger); color: var(--danger); }

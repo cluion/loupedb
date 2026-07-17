@@ -63,10 +63,10 @@ describe('useSchema', () => {
 })
 
 describe('useQuery', () => {
-  it('execute posts sql with queryId', async () => {
-    await useQuery('c1').execute('select 1', 'q1')
+  it('execute posts sql, positional params and queryId', async () => {
+    await useQuery('c1').execute('select $1, $2', ['value', null], 'q1')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/query', {
-      method: 'POST', body: { sql: 'select 1', queryId: 'q1' },
+      method: 'POST', body: { sql: 'select $1, $2', params: ['value', null], queryId: 'q1' },
     })
   })
 
