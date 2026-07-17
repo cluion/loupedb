@@ -32,6 +32,7 @@ describe('postgres driver execute/browse', () => {
     expect(r.columns.map(c => c.name)).toEqual(['id', 'label', 'qty'])
     expect(r.columns.map(c => c.type)).toEqual(['integer', 'string', 'integer'])
     expect(r.rows.length).toBe(3)
+    expect(r.command).toBe('SELECT')
     expect(r.executionMs).toBeGreaterThanOrEqual(0)
     await driver.disconnect()
   })
@@ -40,6 +41,33 @@ describe('postgres driver execute/browse', () => {
     const driver = await setup()
     const r = await driver.execute(`update items set qty = qty + 1 where qty > $1`, [1])
     expect(r.affectedRows).toBe(2)
+    expect(r.command).toBe('UPDATE')
+    await driver.disconnect()
+  })
+
+  it('executeScript keeps every statement on one reserved connection', async () => {
+    const driver = await setup()
+    const results = []
+    for await (const result of driver.executeScript([
+      'create temporary table script_values (value int)',
+      'insert into script_values values (7)',
+      'select value from script_values',
+    ])) results.push(result)
+
+    expect(results).toHaveLength(3)
+    expect(results[2]?.rows).toEqual([{ value: 7 }])
+    await driver.disconnect()
+  })
+
+  it('executeScript rolls back an explicit transaction left open by the script', async () => {
+    const driver = await setup()
+    for await (const _result of driver.executeScript([
+      'begin',
+      'update items set qty = 99 where id = 1',
+    ])) { /* consume every statement */ }
+
+    const result = await driver.execute('select qty from items where id = 1')
+    expect(result.rows).toEqual([{ qty: 1 }])
     await driver.disconnect()
   })
 

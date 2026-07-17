@@ -103,6 +103,43 @@ WHERE
   await page.getByRole('button', { name: '執行選取', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
 
+  // complete scripts run sequentially and expose each result or command in tabs
+  await page.locator('.cm-content').fill(`select 'script first' as step;
+update items set label = label where id = 1;
+select 'script last' as step;`)
+  await page.getByRole('button', { name: '執行完整 Script' }).click()
+  await expect(page.getByRole('tab', { name: '結果 1 SELECT' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '結果 2 UPDATE' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '結果 3 SELECT' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'script first', exact: true })).toBeVisible()
+  await page.getByRole('tab', { name: '結果 2 UPDATE' }).click()
+  await expect(page.getByTestId('script-statement-message')).toContainText('UPDATE・1 列受影響')
+  await page.getByRole('tab', { name: '結果 3 SELECT' }).click()
+  await expect(page.getByRole('cell', { name: 'script last', exact: true })).toBeVisible()
+
+  // an error stops following statements but keeps earlier results available
+  await page.locator('.cm-content').fill(`select 'kept result' as step;
+select * from definitely_missing_script_table;
+select 'never runs' as step;`)
+  await page.getByRole('button', { name: '執行完整 Script' }).click()
+  await expect(page.getByTestId('execution-summary')).toContainText('第 2 / 3 個失敗')
+  await expect(page.getByTestId('script-statement-message')).toContainText('definitely_missing_script_table')
+  await expect(page.getByRole('tab', { name: '結果 3 SELECT' })).not.toBeVisible()
+  await page.getByRole('tab', { name: '結果 1 SELECT' }).click()
+  await expect(page.getByRole('cell', { name: 'kept result', exact: true })).toBeVisible()
+
+  // cancelling a script stops the active statement and skips the remainder
+  await page.locator('.cm-content').fill(`select 'before cancel' as step;
+select pg_sleep(10);
+select 'never runs' as step;`)
+  await page.getByRole('button', { name: '執行完整 Script' }).click()
+  await expect(page.getByRole('button', { name: '停止查詢' })).toBeVisible()
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: '停止查詢' }).click()
+  await expect(page.getByTestId('execution-summary')).toContainText('第 2 / 3 個已取消')
+  await expect(page.getByTestId('script-statement-message')).toContainText('已取消')
+  await expect(page.getByRole('tab', { name: '結果 3 SELECT' })).not.toBeVisible()
+
   // a client-generated query id connects the editor stop button to the
   // existing server-side cancellation pipeline
   await page.locator('.cm-content').fill('select pg_sleep(10)')
@@ -129,7 +166,7 @@ WHERE
   // history drawer lists past executions, newest first, and reopens one in a new tab
   await page.getByRole('button', { name: '查詢歷史' }).click()
   await expect(page.getByTestId('history-entry').first()).toContainText("select 'first' as a")
-  await expect(page.getByTestId('history-entry').filter({ hasText: 'select pg_sleep(10)' })).toContainText('已取消')
+  await expect(page.getByTestId('history-entry').filter({ hasText: 'select pg_sleep(10)' }).first()).toContainText('已取消')
   const tabsBefore = await page.getByRole('tab').count()
   await page.getByTestId('history-entry').first().click()
   await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1)

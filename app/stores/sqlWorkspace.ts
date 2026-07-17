@@ -1,4 +1,4 @@
-import type { QueryResult } from '#shared/types'
+import type { SqlExecutionResult } from '#shared/types'
 
 export interface SqlTabContext {
   readonly connectionId: string
@@ -12,7 +12,7 @@ export interface SqlTab extends SqlTabContext {
   readonly sql: string
   // Results stay in memory while switching tabs, but are deliberately omitted
   // from localStorage because database rows may contain sensitive data.
-  readonly result: QueryResult | null
+  readonly result: SqlExecutionResult | null
 }
 
 export interface SqlWorkspaceState {

@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **完整 SQL Script 與多結果分頁**：多 statement 草稿可選擇依序執行全部，每個 SELECT、affected rows 或錯誤各自保留為結果分頁；全部 statement 固定使用同一條 PostgreSQL connection 且逐句 autocommit，第一個錯誤停止後續，取消目前 statement 後也不再繼續執行
+
 ## [0.4.0] - 2026-07-17
 
 ### Added

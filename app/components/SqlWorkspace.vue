@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { QueryResult, SavedQuery } from '#shared/types'
+import type { SavedQuery, SqlExecutionResult } from '#shared/types'
 import { useSqlWorkspace, type SqlTab, type SqlTabContext } from '../stores/sqlWorkspace'
 import { useQueryHistory } from '../stores/queryHistory'
 
@@ -66,7 +66,7 @@ function dropOn(targetId: string) {
   draggingId.value = null
 }
 
-function updateResult(id: string, result: QueryResult | null) {
+function updateResult(id: string, result: SqlExecutionResult | null) {
   workspace.updateTab(id, { result })
 }
 

@@ -1,26 +1,11 @@
-import { PostgreSQL } from '@codemirror/lang-sql'
-
-export interface StatementRange {
-  readonly from: number
-  readonly to: number
-}
+import { listSqlStatements } from '#shared/sqlStatements'
+export { listSqlStatements, type StatementRange } from '#shared/sqlStatements'
 
 export interface RunnableSql {
   readonly sql: string
   readonly from: number
   readonly to: number
   readonly source: 'selection' | 'statement'
-}
-
-// the lezer grammar knows string literals, comments and dollar-quoted bodies,
-// so statement boundaries here never split on a quoted/commented semicolon
-export function listSqlStatements(doc: string): ReadonlyArray<StatementRange> {
-  const tree = PostgreSQL.language.parser.parse(doc)
-  const ranges: StatementRange[] = []
-  for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
-    if (node.name === 'Statement') ranges.push({ from: node.from, to: node.to })
-  }
-  return ranges
 }
 
 function statementAt(doc: string, pos: number): RunnableSql | null {

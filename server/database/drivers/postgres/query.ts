@@ -24,6 +24,7 @@ export function quoteIdent(name: string): string {
 interface RowListMeta {
   readonly columns?: ReadonlyArray<{ name: string; type: number }>
   readonly count?: number
+  readonly command?: string
 }
 
 export async function executeUnsafe(
@@ -43,6 +44,7 @@ export async function executeUnsafe(
     return {
       columns,
       rows: [...result] as Record<string, unknown>[],
+      command: meta.command,
       rowCount: result.length,
       affectedRows: meta.count,
       executionMs: performance.now() - start,

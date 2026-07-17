@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setup, $fetch } from '@nuxt/test-utils/e2e'
 import postgres from 'postgres'
 import { startPgContainer, type PgTestHandle } from '../helpers/pg-container'
-import type { Envelope, QueryResult } from '#shared/types'
+import type { Envelope, QueryResult, ScriptExecutionResult } from '#shared/types'
 
 process.env.LOUPEDB_MASTER_KEY = 'a'.repeat(64)
 process.env.LOUPEDB_DATA_DIR = mkdtempSync(join(tmpdir(), 'loupedb-api-'))
@@ -63,5 +63,41 @@ describe('query API', async () => {
     })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.code).toBe('42P01') // undefined_table
+  })
+
+  it('POST /script executes statements sequentially and returns every result', async () => {
+    const r = await $fetch<Envelope<ScriptExecutionResult>>(`/api/connections/${connId}/script`, {
+      method: 'POST',
+      body: {
+        sql: `select 'first' as step;
+update items set label = upper(label) where id = 1;
+select label from items where id = 1;`,
+      },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data.status).toBe('success')
+      expect(r.data.statements).toHaveLength(3)
+      expect(r.data.statements.map((entry) => entry.status)).toEqual(['success', 'success', 'success'])
+      const [first, update, last] = r.data.statements
+      if (first?.status === 'success') expect(first.result.rows).toEqual([{ step: 'first' }])
+      if (update?.status === 'success') expect(update.result.affectedRows).toBe(1)
+      if (last?.status === 'success') expect(last.result.rows).toEqual([{ label: 'A' }])
+    }
+  })
+
+  it('POST /script keeps completed results and stops at the first error', async () => {
+    const r = await $fetch<Envelope<ScriptExecutionResult>>(`/api/connections/${connId}/script`, {
+      method: 'POST', body: { sql: 'select 1 as ok; select * from missing_script_table; select 3;' },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data.status).toBe('error')
+      expect(r.data.statements).toHaveLength(2)
+      expect(r.data.statements[0]?.status).toBe('success')
+      expect(r.data.statements[1]?.status).toBe('error')
+      const failed = r.data.statements[1]
+      if (failed?.status === 'error') expect(failed.error.code).toBe('42P01')
+    }
   })
 })

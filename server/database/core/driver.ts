@@ -11,6 +11,7 @@ export interface DatabaseDriver {
   listColumns(schema: string): Promise<ReadonlyArray<TableColumnInfo>>
   describeTable(schema: string, table: string): Promise<TableSchema>
   execute(sql: string, params?: ReadonlyArray<unknown>, queryId?: string): Promise<QueryResult>
+  executeScript(statements: ReadonlyArray<string>, queryId?: string): AsyncIterable<QueryResult>
   browse(schema: string, table: string, opts: BrowseOpts, queryId?: string): Promise<QueryResult>
   cancel(queryId: string): Promise<void>
   stream(schema: string, table: string, opts: BrowseOpts, batchSize: number, queryId?: string): AsyncIterable<ReadonlyArray<Record<string, unknown>>>

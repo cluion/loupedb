@@ -3,14 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import SqlEditor from '../../app/components/SqlEditor.vue'
 
-const { executeMock, cancelMock, formatSqlMock } = vi.hoisted(() => ({
+const { executeMock, executeScriptMock, cancelMock, formatSqlMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
+  executeScriptMock: vi.fn(),
   cancelMock: vi.fn(),
   formatSqlMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   execute: executeMock,
+  executeScript: executeScriptMock,
   browse: vi.fn(), cancel: cancelMock, streamUrl: vi.fn(),
 }))
 
@@ -28,6 +30,10 @@ beforeEach(() => {
       rows: [{ one: 1 }],
       executionMs: 3,
     },
+  })
+  executeScriptMock.mockReset().mockResolvedValue({
+    ok: true as const,
+    data: { kind: 'script', status: 'success', totalStatements: 0, statements: [], executionMs: 0 },
   })
   cancelMock.mockReset().mockResolvedValue({ ok: true as const, data: undefined })
   formatSqlMock.mockReset().mockReturnValue(true)
@@ -100,6 +106,76 @@ describe('SqlEditor', () => {
     })
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 42 as answer;')
+  })
+
+  it('runs the complete script and switches between result sets and command messages', async () => {
+    executeScriptMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        kind: 'script', status: 'success', totalStatements: 3, executionMs: 9,
+        statements: [
+          {
+            index: 0, sql: "select 'first' as step;", status: 'success', executionMs: 2,
+            result: {
+              command: 'SELECT', columns: [{ name: 'step', nativeType: 'text', type: 'string', nullable: true }],
+              rows: [{ step: 'first' }], rowCount: 1, executionMs: 2,
+            },
+          },
+          {
+            index: 1, sql: 'update items set label = label;', status: 'success', executionMs: 3,
+            result: { command: 'UPDATE', columns: [], rows: [], affectedRows: 2, executionMs: 3 },
+          },
+          {
+            index: 2, sql: "select 'last' as step;", status: 'success', executionMs: 4,
+            result: {
+              command: 'SELECT', columns: [{ name: 'step', nativeType: 'text', type: 'string', nullable: true }],
+              rows: [{ step: 'last' }], rowCount: 1, executionMs: 4,
+            },
+          },
+        ],
+      },
+    })
+    const script = "select 'first' as step;\nupdate items set label = label;\nselect 'last' as step;"
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('textarea').setValue(script)
+    await w.get('[aria-label="執行完整 Script"]').trigger('click')
+
+    await vi.waitFor(() => expect(w.findAll('[aria-label^="結果 "]')).toHaveLength(3))
+    expect(executeScriptMock).toHaveBeenCalledWith(script, expect.any(String))
+    expect(w.get('[data-testid="execution-summary"]').text()).toContain('3 個 statement')
+    expect(w.get('tbody td').text()).toBe('first')
+
+    await w.get('[aria-label="結果 2 UPDATE"]').trigger('click')
+    expect(w.get('[data-testid="script-statement-message"]').text()).toContain('UPDATE・2 列受影響')
+    await w.get('[aria-label="結果 3 SELECT"]').trigger('click')
+    expect(w.get('tbody td').text()).toBe('last')
+  })
+
+  it('selects the failed statement while keeping completed script results available', async () => {
+    executeScriptMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        kind: 'script', status: 'error', totalStatements: 3, executionMs: 5,
+        statements: [
+          {
+            index: 0, sql: 'select 1;', status: 'success', executionMs: 2,
+            result: { command: 'SELECT', columns: [], rows: [], rowCount: 1, executionMs: 2 },
+          },
+          {
+            index: 1, sql: 'select * from missing;', status: 'error', executionMs: 3,
+            error: { code: '42P01', message: 'missing relation', severity: 'error', retryable: false },
+          },
+        ],
+      },
+    })
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('textarea').setValue('select 1; select * from missing; select 3;')
+    await w.get('[aria-label="執行完整 Script"]').trigger('click')
+
+    await vi.waitFor(() => expect(w.get('[data-testid="execution-summary"]').text()).toContain('第 2 / 3 個失敗'))
+    expect(w.get('[aria-label="結果 2 SELECT"]').attributes('aria-selected')).toBe('true')
+    expect(w.get('[data-testid="script-statement-message"]').text()).toContain('missing relation')
+    expect(w.find('[aria-label="結果 3 SELECT"]').exists()).toBe(false)
   })
 
   it('feeds completion metadata and default schema into the code editor', async () => {

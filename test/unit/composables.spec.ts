@@ -70,6 +70,13 @@ describe('useQuery', () => {
     })
   })
 
+  it('executeScript posts the complete script with queryId', async () => {
+    await useQuery('c1').executeScript('select 1; select 2;', 'q2')
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/script', {
+      method: 'POST', body: { sql: 'select 1; select 2;', queryId: 'q2' },
+    })
+  })
+
   it('browse posts schema/table/opts', async () => {
     const opts = { limit: 10, offset: 0 }
     await useQuery('c1').browse('public', 'items', opts)

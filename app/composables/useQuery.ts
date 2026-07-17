@@ -1,9 +1,14 @@
-import type { BrowseOpts, Envelope, QueryResult } from '#shared/types'
+import type { BrowseOpts, Envelope, QueryResult, ScriptExecutionResult } from '#shared/types'
 
 export function useQuery(connId: string) {
   return {
     async execute(sql: string, queryId?: string) {
       return await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+        method: 'POST', body: { sql, queryId },
+      })
+    },
+    async executeScript(sql: string, queryId?: string) {
+      return await $fetch<Envelope<ScriptExecutionResult>>(`/api/connections/${connId}/script`, {
         method: 'POST', body: { sql, queryId },
       })
     },

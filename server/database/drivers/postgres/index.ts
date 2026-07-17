@@ -55,6 +55,20 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
       if (!handle) throw new Error('not connected')
       return executeUnsafe(handle.sql, sqlText, params, queryId, activeQueries, oidCache)
     },
+    async* executeScript(statements: ReadonlyArray<string>, queryId?: string) {
+      if (!handle) throw new Error('not connected')
+      const reserved = await handle.sql.reserve()
+      try {
+        for (const statement of statements) {
+          yield await executeUnsafe(reserved, statement, [], queryId, activeQueries, oidCache)
+        }
+      } finally {
+        // Never return a reserved connection with an open or aborted explicit
+        // transaction. Outside a transaction PostgreSQL treats this as a no-op.
+        try { await reserved.unsafe('rollback') } catch { /* connection failure already makes it unusable */ }
+        reserved.release()
+      }
+    },
     async browse(schema: string, table: string, opts: BrowseOpts, queryId?: string) {
       if (!handle) throw new Error('not connected')
       return browseTable(handle.sql, schema, table, opts, queryId, activeQueries, oidCache)

@@ -14,11 +14,32 @@ export interface ColumnInfo {
 export interface QueryResult {
   readonly columns: ReadonlyArray<ColumnInfo>
   readonly rows: ReadonlyArray<Record<string, unknown>>
+  readonly command?: string
   readonly rowCount?: number
   readonly affectedRows?: number
   readonly executionMs: number
   readonly notice?: string
 }
+
+interface ScriptStatementBase {
+  readonly index: number
+  readonly sql: string
+  readonly executionMs: number
+}
+
+export type ScriptStatementResult =
+  | ScriptStatementBase & { readonly status: 'success'; readonly result: QueryResult }
+  | ScriptStatementBase & { readonly status: 'error' | 'cancelled'; readonly error: DatabaseError }
+
+export interface ScriptExecutionResult {
+  readonly kind: 'script'
+  readonly status: 'success' | 'error' | 'cancelled'
+  readonly totalStatements: number
+  readonly statements: ReadonlyArray<ScriptStatementResult>
+  readonly executionMs: number
+}
+
+export type SqlExecutionResult = QueryResult | ScriptExecutionResult
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'error' | 'closed'
 
