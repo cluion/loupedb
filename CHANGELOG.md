@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **PostgreSQL SQL Formatter**：可用工具列、`⇧⌥F`（macOS）或 `Shift+Alt+F` 格式化整份 SQL；有選取範圍時只格式化選取內容，保留游標／選取狀態，解析失敗不覆蓋原始草稿
+
 ## [0.3.0] - 2026-07-17
 
 ### Added

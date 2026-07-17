@@ -37,9 +37,15 @@ interface ExecutionSummary {
   readonly affectedRows: number | null
 }
 
+interface SqlCodeEditorHandle {
+  formatSql: () => boolean
+}
+
 const sql = ref(props.modelValue)
+const codeEditor = ref<SqlCodeEditorHandle | null>(null)
 const queryResult = ref<QueryResult | null>(props.result)
 const error = ref<string | null>(null)
+const formatError = ref<string | null>(null)
 const running = ref(false)
 const cancelling = ref(false)
 const lastExecution = ref<ExecutionSummary | null>(null)
@@ -52,7 +58,10 @@ watch(() => props.modelValue, (value) => {
   if (value !== sql.value) sql.value = value
 })
 watch(() => props.result, (value) => { queryResult.value = value })
-watch(() => props.connectionId, () => { error.value = null })
+watch(() => props.connectionId, () => {
+  error.value = null
+  formatError.value = null
+})
 
 // completion metadata for the bound connection - loads lazily, cached per id
 const completion = computed(() => useSqlCompletion(props.connectionId))
@@ -60,7 +69,20 @@ watch(completion, (c) => { c.ensureLoaded() }, { immediate: true })
 
 function updateSql(value: string) {
   sql.value = value
+  formatError.value = null
   emit('update:modelValue', value)
+}
+
+function formatSql() {
+  codeEditor.value?.formatSql()
+}
+
+function onFormatted() {
+  formatError.value = null
+}
+
+function onFormatError(message: string) {
+  formatError.value = `SQL 格式化失敗：${message}`
 }
 
 function createQueryId(): string {
@@ -171,12 +193,15 @@ function startTime(at: number): string {
 <template>
   <div class="editor">
     <SqlCodeEditor
+      ref="codeEditor"
       :model-value="sql"
       :schema="completion.namespace.value"
       :default-schema="defaultSchema ?? 'public'"
       @update:model-value="updateSql"
       @update:runnable="runnable = $event"
       @run="run($event)"
+      @formatted="onFormatted"
+      @format-error="onFormatError"
     />
     <div class="actions">
       <button v-if="!running" class="primary" title="⌘⏎ / Ctrl+Enter" @click="run()">
@@ -184,6 +209,9 @@ function startTime(at: number): string {
       </button>
       <button v-else class="stop" :disabled="cancelling" aria-label="停止查詢" @click="stop">
         {{ cancelling ? '取消中…' : '停止' }}
+      </button>
+      <button type="button" aria-label="格式化 SQL" title="⇧⌥F / Shift+Alt+F" @click="formatSql">
+        格式化
       </button>
       <span v-if="lastExecution" class="meta" data-testid="execution-summary">
         <template v-if="lastExecution.status === 'success'">
@@ -200,6 +228,7 @@ function startTime(at: number): string {
       </span>
       <ResultExport v-if="queryResult && queryResult.columns.length" :result="queryResult" />
     </div>
+    <p v-if="formatError" role="alert" data-testid="format-error">{{ formatError }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <div v-if="queryResult && queryResult.columns.length" class="scroll">
       <table>

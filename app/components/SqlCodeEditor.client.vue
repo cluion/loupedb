@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Decoration, EditorView, keymap, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
 import { basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { formatPostgresSql } from '../utils/sqlFormatter'
 import { listSqlStatements, resolveRunnableSql, type RunnableSql } from '../utils/sqlStatements'
 import type { SqlNamespace } from '../utils/sqlCompletion'
 
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:runnable': [runnable: RunnableSql | null]
   run: [runnable: RunnableSql | null]
+  formatted: [target: 'selection' | 'document']
+  'format-error': [message: string]
 }>()
 
 function runnableOf(state: EditorState): RunnableSql | null {
@@ -55,6 +58,92 @@ const statementHighlighter = ViewPlugin.fromClass(class {
 
 const host = ref<HTMLElement | null>(null)
 let view: EditorView | null = null
+
+function nonWhitespaceOffset(source: string, position: number): number {
+  let count = 0
+  for (let i = 0; i < position; i++) {
+    if (!/\s/u.test(source[i]!)) count++
+  }
+  return count
+}
+
+function positionAtNonWhitespaceOffset(source: string, offset: number): number {
+  if (offset === 0) return 0
+  let count = 0
+  for (let i = 0; i < source.length; i++) {
+    if (!/\s/u.test(source[i]!) && ++count === offset) return i + 1
+  }
+  return source.length
+}
+
+async function applyFormatSql(editor: EditorView) {
+  const state = editor.state
+  const selection = state.selection.main
+  const target = selection.empty ? 'document' : 'selection'
+  const from = target === 'selection' ? selection.from : 0
+  const to = target === 'selection' ? selection.to : state.doc.length
+  const source = state.doc.sliceString(from, to)
+
+  try {
+    const formatted = await formatPostgresSql(source)
+    if (view !== editor) return
+    const currentSelection = editor.state.selection.main
+    if (
+      editor.state.doc.sliceString(from, to) !== source
+      || currentSelection.anchor !== selection.anchor
+      || currentSelection.head !== selection.head
+    ) return
+    if (formatted !== source) {
+      let nextSelection: EditorSelection
+      if (target === 'selection') {
+        const start = from
+        const end = from + formatted.length
+        nextSelection = EditorSelection.single(
+          selection.anchor <= selection.head ? start : end,
+          selection.anchor <= selection.head ? end : start,
+        )
+      } else {
+        const position = positionAtNonWhitespaceOffset(
+          formatted,
+          nonWhitespaceOffset(source, selection.head),
+        )
+        nextSelection = EditorSelection.single(position)
+      }
+      editor.dispatch({
+        changes: { from, to, insert: formatted },
+        selection: nextSelection,
+        scrollIntoView: true,
+      })
+    }
+    editor.focus()
+    emit('formatted', target)
+  } catch (error) {
+    if (view !== editor || editor.state.doc.sliceString(from, to) !== source) return
+    emit('format-error', error instanceof Error ? error.message : String(error))
+    editor.focus()
+  }
+}
+
+function formatSql(): boolean {
+  if (!view) return false
+  void applyFormatSql(view)
+  return true
+}
+
+function formatShortcut(editor: EditorView, event: KeyboardEvent): boolean {
+  if (
+    event.code !== 'KeyF'
+    || !event.shiftKey
+    || !event.altKey
+    || event.ctrlKey
+    || event.metaKey
+  ) return false
+
+  void applyFormatSql(editor)
+  return true
+}
+
+defineExpose({ formatSql })
 
 // loupe palette - hex mirrors the tokens in assets/css/main.css
 const loupeHighlight = HighlightStyle.define([
@@ -103,7 +192,10 @@ onMounted(() => {
       doc: props.modelValue,
       extensions: [
         // before basicSetup so Mod-Enter wins over the default insert-newline
-        keymap.of([{ key: 'Mod-Enter', run: (v) => { emit('run', runnableOf(v.state)); return true } }]),
+        keymap.of([
+          { key: 'Mod-Enter', run: (v) => { emit('run', runnableOf(v.state)); return true } },
+          { any: formatShortcut },
+        ]),
         basicSetup,
         langCompartment.of(sqlExtension()),
         syntaxHighlighting(loupeHighlight),

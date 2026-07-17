@@ -45,6 +45,49 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '執行', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'lens', exact: true })).toBeVisible()
 
+  // format only the active selection, keep it selected, and leave the rest untouched
+  await page.locator('.cm-content').fill('select 1;\nselect id,name from items where id=1;')
+  await page.locator('.cm-line').nth(1).click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  await page.getByRole('button', { name: '格式化 SQL' }).click()
+  await expect.poll(() => page.locator('.cm-content').evaluate((editor) => (
+    [...editor.querySelectorAll('.cm-line')].map(line => line.textContent).join('\n')
+  ))).toBe(`select 1;
+SELECT
+  id,
+  name
+FROM
+  items
+WHERE
+  id = 1;`)
+  await page.keyboard.type('REPLACED')
+  await expect(page.locator('.cm-content')).toContainText('select 1;REPLACED')
+
+  // a formatter parse error never overwrites the original draft
+  await page.locator('.cm-content').fill("select 'unterminated")
+  await page.getByRole('button', { name: '格式化 SQL' }).click()
+  await expect(page.getByTestId('format-error')).toContainText('SQL 格式化失敗')
+  await expect(page.locator('.cm-content')).toContainText("select 'unterminated")
+
+  // macOS Option+Shift+F reports the typed character Ï instead of key f;
+  // matching the physical KeyF still formats and prevents that character input
+  await page.locator('.cm-content').fill('select id,name from items where id=1;')
+  await page.locator('.cm-content').evaluate(editor => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Ï', code: 'KeyF', shiftKey: true, altKey: true, bubbles: true, cancelable: true,
+  })))
+  await expect.poll(() => page.locator('.cm-content').evaluate((editor) => (
+    [...editor.querySelectorAll('.cm-line')].map(line => line.textContent).join('\n')
+  ))).toBe(`SELECT
+  id,
+  name
+FROM
+  items
+WHERE
+  id = 1;`)
+  await expect(page.getByTestId('format-error')).not.toBeVisible()
+  await expect(page.locator('.cm-content')).not.toContainText('Ï')
+
   // with two statements, only the one under the cursor runs (fill leaves the
   // cursor at the end, i.e. inside the second statement, which gets highlighted)
   await page.locator('.cm-content').fill("select 'first' as a;\nselect 'second' as b;")

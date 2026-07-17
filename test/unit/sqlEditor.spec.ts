@@ -3,9 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import SqlEditor from '../../app/components/SqlEditor.vue'
 
-const { executeMock, cancelMock } = vi.hoisted(() => ({
+const { executeMock, cancelMock, formatSqlMock } = vi.hoisted(() => ({
   executeMock: vi.fn(),
   cancelMock: vi.fn(),
+  formatSqlMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
@@ -29,13 +30,17 @@ beforeEach(() => {
     },
   })
   cancelMock.mockReset().mockResolvedValue({ ok: true as const, data: undefined })
+  formatSqlMock.mockReset().mockReturnValue(true)
 })
 
 // CodeMirror needs a real browser - unit tests drive the same v-model contract
 // through a textarea stand-in; the e2e test exercises the real editor
 const SqlCodeEditorStub = {
   props: ['modelValue', 'schema', 'defaultSchema'],
-  emits: ['update:modelValue', 'update:runnable', 'run'],
+  emits: ['update:modelValue', 'update:runnable', 'run', 'formatted', 'format-error'],
+  setup(_: unknown, { expose }: { expose: (value: { formatSql: typeof formatSqlMock }) => void }) {
+    expose({ formatSql: formatSqlMock })
+  },
   template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
 }
 const mountOpts = {
@@ -111,6 +116,30 @@ describe('SqlEditor', () => {
   it('falls back to the public schema when no context is given', async () => {
     const w = await mountSuspended(SqlEditor, mountOpts)
     expect(w.findComponent(SqlCodeEditorStub).props('defaultSchema')).toBe('public')
+  })
+
+  it('asks the code editor to format SQL from the toolbar', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('[aria-label="格式化 SQL"]').trigger('click')
+    expect(formatSqlMock).toHaveBeenCalledOnce()
+  })
+
+  it('shows formatter errors and clears stale errors after edits or a successful format', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    const editor = w.findComponent(SqlCodeEditorStub)
+
+    editor.vm.$emit('format-error', 'Parse error')
+    await nextTick()
+    expect(w.get('[data-testid="format-error"]').text()).toBe('SQL 格式化失敗：Parse error')
+
+    await w.get('textarea').setValue('select 1')
+    expect(w.find('[data-testid="format-error"]').exists()).toBe(false)
+
+    editor.vm.$emit('format-error', 'Parse error')
+    await nextTick()
+    editor.vm.$emit('formatted', 'document')
+    await nextTick()
+    expect(w.find('[data-testid="format-error"]').exists()).toBe(false)
   })
 
   it('reports a successful execution for history recording', async () => {
