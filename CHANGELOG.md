@@ -7,6 +7,7 @@
 ### Added
 
 - **前次結果比對**：每個 SQL 分頁在新一次執行時保留上一份結果，可在目前／前次結果間切換並查看各自列數；一般查詢與完整 script 都適用，兩份結果只留在記憶體且不寫入 localStorage
+- **PostgreSQL 查詢訊息**：顯示一般查詢與完整 script 各 statement 產生的 NOTICE、WARNING、INFO、LOG 與 DEBUG，包含 SQLSTATE、detail、hint 與 context；失敗前已送出的訊息也會保留，並以獨立連線 slot 避免並行查詢互相混入訊息
 
 ## [0.5.0] - 2026-07-17
 

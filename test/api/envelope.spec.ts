@@ -21,6 +21,12 @@ describe('api envelope', () => {
     expect(e.retryable).toBe(false)
   })
 
+  it('preserves messages emitted before a database error', () => {
+    const messages = [{ severity: 'notice' as const, message: 'before failure', code: '00000' }]
+    const e = toDatabaseError({ code: 'P0001', message: 'boom', severity: 'ERROR', messages })
+    expect(e.messages).toEqual(messages)
+  })
+
   it('marks 08xxx connection errors retryable', () => {
     const e = toDatabaseError({ code: '08006', message: 'connection failure', severity: 'FATAL' })
     expect(e.retryable).toBe(true)

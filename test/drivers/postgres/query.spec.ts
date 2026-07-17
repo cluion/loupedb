@@ -45,6 +45,32 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('captures notices per concurrent query, script statement and failed query', async () => {
+    const driver = await setup()
+    const [first, second] = await Promise.all([
+      driver.execute(`do $$ begin perform pg_sleep(0.1); raise notice 'first notice'; end $$`),
+      driver.execute(`do $$ begin raise warning 'second warning'; end $$`),
+    ])
+    expect(first.messages).toMatchObject([{ severity: 'notice', message: 'first notice', code: '00000' }])
+    expect(second.messages).toMatchObject([{ severity: 'warning', message: 'second warning', code: '01000' }])
+
+    const scriptResults = []
+    for await (const result of driver.executeScript([
+      `do $$ begin raise notice 'script one'; end $$`,
+      `do $$ begin raise warning 'script two'; end $$`,
+    ])) scriptResults.push(result)
+    expect(scriptResults[0]?.messages?.[0]?.message).toBe('script one')
+    expect(scriptResults[1]?.messages?.[0]?.message).toBe('script two')
+
+    try {
+      await driver.execute(`do $$ begin raise notice 'before failure'; raise exception 'boom'; end $$`)
+      expect.unreachable('query should fail')
+    } catch (cause) {
+      expect(cause).toMatchObject({ messages: [{ severity: 'notice', message: 'before failure' }] })
+    }
+    await driver.disconnect()
+  })
+
   it('executeScript keeps every statement on one reserved connection', async () => {
     const driver = await setup()
     const results = []

@@ -57,12 +57,35 @@ describe('query API', async () => {
     if (r.ok) expect(r.data.rows.map(x => x.label)).toEqual(['b'])
   })
 
+  it('POST /query returns PostgreSQL notices and warnings', async () => {
+    const r = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST',
+      body: { sql: `do $$ begin raise notice 'api notice'; raise warning 'api warning'; end $$` },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data.messages).toMatchObject([
+        { severity: 'notice', message: 'api notice', code: '00000' },
+        { severity: 'warning', message: 'api warning', code: '01000' },
+      ])
+    }
+  })
+
   it('sql error returns fail envelope with redacted-safe message', async () => {
     const r = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
       method: 'POST', body: { sql: 'select * from does_not_exist' },
     })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.code).toBe('42P01') // undefined_table
+  })
+
+  it('sql error keeps messages emitted before the failure', async () => {
+    const r = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST',
+      body: { sql: `do $$ begin raise notice 'before api failure'; raise exception 'boom'; end $$` },
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.messages?.[0]?.message).toBe('before api failure')
   })
 
   it('POST /script executes statements sequentially and returns every result', async () => {

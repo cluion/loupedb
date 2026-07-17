@@ -101,6 +101,28 @@ describe('SqlEditor', () => {
     expect(w.get('tbody td').text()).toBe('after')
   })
 
+  it('shows PostgreSQL notices, warnings and message details', async () => {
+    executeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        columns: [], rows: [], executionMs: 2,
+        messages: [
+          { severity: 'notice', code: '00000', message: 'refresh complete', detail: '12 rows checked' },
+          { severity: 'warning', code: '01000', message: 'using fallback', hint: 'check the index' },
+        ],
+      },
+    })
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.get('button.primary').trigger('click')
+
+    await vi.waitFor(() => expect(w.get('[data-testid="query-messages"]').text()).toContain('訊息・2'))
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('NOTICE')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('refresh complete')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('詳細：12 rows checked')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('WARNING')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('提示：check the index')
+  })
+
   it('executes only the statement the editor reports under the cursor', async () => {
     const w = await mountSuspended(SqlEditor, mountOpts)
     await w.find('textarea').setValue('select 1 as first;\nselect 2 as second;')
@@ -147,11 +169,15 @@ describe('SqlEditor', () => {
             result: {
               command: 'SELECT', columns: [{ name: 'step', nativeType: 'text', type: 'string', nullable: true }],
               rows: [{ step: 'first' }], rowCount: 1, executionMs: 2,
+              messages: [{ severity: 'notice', message: 'first message' }],
             },
           },
           {
             index: 1, sql: 'update items set label = label;', status: 'success', executionMs: 3,
-            result: { command: 'UPDATE', columns: [], rows: [], affectedRows: 2, executionMs: 3 },
+            result: {
+              command: 'UPDATE', columns: [], rows: [], affectedRows: 2, executionMs: 3,
+              messages: [{ severity: 'warning', message: 'update warning' }],
+            },
           },
           {
             index: 2, sql: "select 'last' as step;", status: 'success', executionMs: 4,
@@ -172,9 +198,11 @@ describe('SqlEditor', () => {
     expect(executeScriptMock).toHaveBeenCalledWith(script, expect.any(String))
     expect(w.get('[data-testid="execution-summary"]').text()).toContain('3 個 statement')
     expect(w.get('tbody td').text()).toBe('first')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('first message')
 
     await w.get('[aria-label="結果 2 UPDATE"]').trigger('click')
     expect(w.get('[data-testid="script-statement-message"]').text()).toContain('UPDATE・2 列受影響')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('update warning')
     await w.get('[aria-label="結果 3 SELECT"]').trigger('click')
     expect(w.get('tbody td').text()).toBe('last')
   })
@@ -191,7 +219,10 @@ describe('SqlEditor', () => {
           },
           {
             index: 1, sql: 'select * from missing;', status: 'error', executionMs: 3,
-            error: { code: '42P01', message: 'missing relation', severity: 'error', retryable: false },
+            error: {
+              code: '42P01', message: 'missing relation', severity: 'error', retryable: false,
+              messages: [{ severity: 'notice', message: 'before script failure' }],
+            },
           },
         ],
       },
@@ -203,6 +234,7 @@ describe('SqlEditor', () => {
     await vi.waitFor(() => expect(w.get('[data-testid="execution-summary"]').text()).toContain('第 2 / 3 個失敗'))
     expect(w.get('[aria-label="結果 2 SELECT"]').attributes('aria-selected')).toBe('true')
     expect(w.get('[data-testid="script-statement-message"]').text()).toContain('missing relation')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('before script failure')
     expect(w.find('[aria-label="結果 3 SELECT"]').exists()).toBe(false)
   })
 
@@ -309,7 +341,11 @@ describe('SqlEditor', () => {
 
   it('shows an error while keeping the last result as the previous version', async () => {
     executeMock.mockResolvedValueOnce({
-      ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },
+      ok: false,
+      error: {
+        code: '42P01', message: 'no such table', severity: 'error', retryable: false,
+        messages: [{ severity: 'notice', message: 'before editor failure' }],
+      },
     } as never)
     const w = await mountSuspended(SqlEditor, {
       ...mountOpts,
@@ -324,6 +360,7 @@ describe('SqlEditor', () => {
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(w.find('[role="alert"]').exists()).toBe(true))
     expect(w.find('[role="alert"]').text()).toContain('no such table')
+    expect(w.get('[data-testid="query-messages"]').text()).toContain('before editor failure')
     expect(w.emitted('execution-started')).toHaveLength(1)
     expect(w.find('table').exists()).toBe(false)
 

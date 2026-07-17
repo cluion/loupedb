@@ -1,4 +1,4 @@
-import type { DatabaseError } from '#shared/types'
+import type { DatabaseError, QueryMessage } from '#shared/types'
 
 // driver error messages may embed credentials - strip connection strings and
 // password fragments before anything reaches a response or log (spec 4.5.5)
@@ -9,6 +9,9 @@ function redact(message: string): string {
 }
 
 export function toDatabaseError(err: unknown): DatabaseError {
+  const messages = err && typeof err === 'object' && Array.isArray((err as { messages?: unknown }).messages)
+    ? (err as { messages: ReadonlyArray<QueryMessage> }).messages
+    : undefined
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const e = err as { code: string; message: string; severity?: string }
     const sev = (e.severity ?? 'ERROR').toLowerCase()
@@ -17,8 +20,12 @@ export function toDatabaseError(err: unknown): DatabaseError {
       message: redact(String(e.message)),
       severity: sev.includes('fatal') ? 'fatal' : sev.includes('warn') ? 'warning' : 'error',
       retryable: String(e.code).startsWith('08'), // class 08 = connection errors
+      ...(messages?.length ? { messages } : {}),
     }
   }
   const msg = err instanceof Error ? err.message : String(err)
-  return { code: 'UNKNOWN', message: redact(msg), severity: 'error', retryable: false }
+  return {
+    code: 'UNKNOWN', message: redact(msg), severity: 'error', retryable: false,
+    ...(messages?.length ? { messages } : {}),
+  }
 }

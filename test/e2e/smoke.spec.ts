@@ -88,6 +88,17 @@ WHERE
   await expect(page.getByTestId('format-error')).not.toBeVisible()
   await expect(page.locator('.cm-content')).not.toContainText('Ï')
 
+  // PostgreSQL notices and warnings are attached to the query that emitted them
+  await page.locator('.cm-content').fill(`do $$ begin
+raise notice 'refresh complete';
+raise warning 'using fallback';
+end $$;`)
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByTestId('query-messages')).toContainText('NOTICE')
+  await expect(page.getByTestId('query-messages')).toContainText('refresh complete')
+  await expect(page.getByTestId('query-messages')).toContainText('WARNING')
+  await expect(page.getByTestId('query-messages')).toContainText('using fallback')
+
   // with two statements, only the one under the cursor runs (fill leaves the
   // cursor at the end, i.e. inside the second statement, which gets highlighted)
   await page.locator('.cm-content').fill("select 'first' as a;\nselect 'second' as b;")

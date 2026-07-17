@@ -11,6 +11,17 @@ export interface ColumnInfo {
   readonly defaultValue?: unknown
 }
 
+export type QueryMessageSeverity = 'debug' | 'info' | 'log' | 'notice' | 'warning'
+
+export interface QueryMessage {
+  readonly severity: QueryMessageSeverity
+  readonly message: string
+  readonly code?: string
+  readonly detail?: string
+  readonly hint?: string
+  readonly context?: string
+}
+
 export interface QueryResult {
   readonly columns: ReadonlyArray<ColumnInfo>
   readonly rows: ReadonlyArray<Record<string, unknown>>
@@ -18,7 +29,7 @@ export interface QueryResult {
   readonly rowCount?: number
   readonly affectedRows?: number
   readonly executionMs: number
-  readonly notice?: string
+  readonly messages?: ReadonlyArray<QueryMessage>
 }
 
 interface ScriptStatementBase {
@@ -89,6 +100,7 @@ export interface DatabaseError {
   readonly message: string
   readonly severity: 'error' | 'warning' | 'fatal'
   readonly retryable: boolean
+  readonly messages?: ReadonlyArray<QueryMessage>
 }
 
 export interface SavedQuery {

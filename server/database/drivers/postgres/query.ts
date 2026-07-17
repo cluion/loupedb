@@ -1,10 +1,27 @@
 import type postgres from 'postgres'
-import type { QueryResult, ColumnInfo, BrowseOpts } from '#shared/types'
+import type { QueryResult, ColumnInfo, BrowseOpts, QueryMessage } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
 
 export interface CancellableQuery { cancel(): void }
+
+interface ErrorWithMessages {
+  messages?: ReadonlyArray<QueryMessage>
+}
+
+function attachMessages(cause: unknown, messages: ReadonlyArray<QueryMessage>): unknown {
+  if (!messages.length) return cause
+  if (cause && typeof cause === 'object') {
+    try {
+      ;(cause as ErrorWithMessages).messages = messages
+      return cause
+    } catch { /* fall through to a writable wrapper */ }
+  }
+  const wrapped = new Error(cause instanceof Error ? cause.message : String(cause), { cause })
+  ;(wrapped as ErrorWithMessages).messages = messages
+  return wrapped
+}
 
 // oid -> type name cache must be per-driver: custom type oids differ across databases
 async function oidToTypeName(sql: Sql, oid: number, oidCache: Map<number, string>): Promise<string> {
@@ -30,6 +47,7 @@ interface RowListMeta {
 export async function executeUnsafe(
   sql: Sql, text: string, params: ReadonlyArray<unknown>, queryId: string | undefined,
   activeQueries: Map<string, CancellableQuery>, oidCache: Map<number, string>,
+  takeMessages: () => ReadonlyArray<QueryMessage> = () => [],
 ): Promise<QueryResult> {
   const start = performance.now()
   const query = sql.unsafe(text, [...params] as never[])
@@ -41,6 +59,7 @@ export async function executeUnsafe(
       const native = await oidToTypeName(sql, c.type, oidCache)
       return { name: c.name, nativeType: native, type: normalizePgType(native), nullable: true }
     }))
+    const messages = takeMessages()
     return {
       columns,
       rows: [...result] as Record<string, unknown>[],
@@ -48,7 +67,10 @@ export async function executeUnsafe(
       rowCount: result.length,
       affectedRows: meta.count,
       executionMs: performance.now() - start,
+      ...(messages.length ? { messages } : {}),
     }
+  } catch (cause) {
+    throw attachMessages(cause, takeMessages())
   } finally {
     if (queryId) activeQueries.delete(queryId)
   }

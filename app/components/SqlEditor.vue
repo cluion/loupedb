@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  QueryMessage,
   QueryResult,
   ScriptExecutionResult,
   ScriptStatementResult,
@@ -65,6 +66,7 @@ const previousQueryOutput = ref<SqlExecutionResult | null>(props.previousResult)
 const resultVersion = ref<'current' | 'previous'>('current')
 const activeScriptIndex = ref(0)
 const error = ref<string | null>(null)
+const failedMessages = ref<ReadonlyArray<QueryMessage>>([])
 const formatError = ref<string | null>(null)
 const running = ref(false)
 const cancelling = ref(false)
@@ -91,6 +93,15 @@ const queryResult = computed<QueryResult | null>(() => {
   const statement = activeScriptStatement.value
   return statement?.status === 'success' ? statement.result : null
 })
+const visibleMessages = computed<ReadonlyArray<QueryMessage>>(() => {
+  if (!visibleOutput.value) {
+    return resultVersion.value === 'current' ? failedMessages.value : []
+  }
+  if (!scriptResult.value) return queryResult.value?.messages ?? []
+  const statement = activeScriptStatement.value
+  if (!statement) return []
+  return statement.status === 'success' ? statement.result.messages ?? [] : statement.error.messages ?? []
+})
 
 watch(() => props.modelValue, (value) => {
   if (value !== sql.value) sql.value = value
@@ -99,6 +110,7 @@ watch(() => props.result, (value) => {
   if (value !== queryOutput.value) {
     queryOutput.value = value
     activeScriptIndex.value = 0
+    if (value) failedMessages.value = []
   }
 })
 watch(() => props.previousResult, (value) => {
@@ -106,6 +118,7 @@ watch(() => props.previousResult, (value) => {
 })
 watch(() => props.connectionId, () => {
   error.value = null
+  failedMessages.value = []
   formatError.value = null
   resultVersion.value = 'current'
 })
@@ -159,6 +172,7 @@ function finish(run: ActiveRun, summary: ExecutionSummary): void {
 function beginRun(executedSql: string): ActiveRun | null {
   if (activeRun) return null
   error.value = null
+  failedMessages.value = []
   if (queryOutput.value) previousQueryOutput.value = queryOutput.value
   queryOutput.value = null
   resultVersion.value = 'current'
@@ -177,9 +191,15 @@ function beginRun(executedSql: string): ActiveRun | null {
   return runState
 }
 
-function failRun(runState: ActiveRun, message: string, code?: string) {
+function failRun(
+  runState: ActiveRun,
+  message: string,
+  code?: string,
+  messages: ReadonlyArray<QueryMessage> = [],
+) {
   const cancelled = runState.cancelRequested && code === '57014'
   if (!cancelled) error.value = message
+  failedMessages.value = messages
   finish(runState, {
     status: cancelled ? 'cancelled' : 'error',
     startedAt: runState.startedAt,
@@ -214,7 +234,7 @@ async function run(target: RunnableSql | null = runnable.value) {
         script: null,
       })
     } else {
-      failRun(runState, r.error.message, r.error.code)
+      failRun(runState, r.error.message, r.error.code, r.error.messages)
     }
   } catch (err) {
     if (activeRun !== runState) return
@@ -246,7 +266,7 @@ async function runScript() {
     const r = await useQuery(runState.connectionId).executeScript(runState.sql, runState.queryId)
     if (activeRun !== runState) return
     if (!r.ok) {
-      failRun(runState, r.error.message, r.error.code)
+      failRun(runState, r.error.message, r.error.code, r.error.messages)
       return
     }
 
@@ -399,6 +419,19 @@ function showResultVersion(version: 'current' | 'previous') {
     </div>
     <p v-if="formatError" role="alert" data-testid="format-error">{{ formatError }}</p>
     <p v-if="error && resultVersion === 'current'" role="alert">{{ error }}</p>
+    <details v-if="visibleMessages.length" open class="query-messages" data-testid="query-messages">
+      <summary>訊息・{{ visibleMessages.length }}</summary>
+      <ul>
+        <li v-for="(message, index) in visibleMessages" :key="`${message.code ?? ''}-${index}`">
+          <span :class="['message-severity', message.severity]">{{ message.severity.toUpperCase() }}</span>
+          <code v-if="message.code">{{ message.code }}</code>
+          <span>{{ message.message }}</span>
+          <small v-if="message.detail">詳細：{{ message.detail }}</small>
+          <small v-if="message.hint">提示：{{ message.hint }}</small>
+          <small v-if="message.context">{{ message.context }}</small>
+        </li>
+      </ul>
+    </details>
     <div v-if="scriptResult" class="script-results">
       <div class="result-tabs" role="tablist" aria-label="Script 結果">
         <button
@@ -454,6 +487,13 @@ function showResultVersion(version: 'current' | 'previous') {
 .result-versions button { display: flex; align-items: baseline; gap: 8px; }
 .result-versions button[aria-selected="true"] { border-color: var(--brass); color: var(--brass); }
 .result-versions small { color: var(--muted); font-family: var(--font-data); }
+.query-messages { border: 1px solid var(--line); border-radius: var(--radius); }
+.query-messages summary { cursor: pointer; padding: 8px 12px; color: var(--muted); font-size: 12px; }
+.query-messages ul { display: grid; gap: 8px; margin: 0; padding: 0 12px 10px; list-style: none; }
+.query-messages li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; }
+.query-messages li > small { flex-basis: 100%; color: var(--muted); padding-left: 62px; }
+.message-severity { min-width: 56px; font-family: var(--font-data); color: var(--muted); }
+.message-severity.warning { color: var(--brass); }
 .script-results { display: flex; flex-direction: column; gap: 8px; }
 .result-tabs { display: flex; gap: 6px; overflow-x: auto; }
 .result-tab { font-family: var(--font-data); font-size: 12px; white-space: nowrap; }
