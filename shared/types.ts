@@ -32,6 +32,13 @@ export interface QueryResult {
   readonly messages?: ReadonlyArray<QueryMessage>
 }
 
+export type TransactionStatus = 'idle' | 'active' | 'failed'
+
+export interface TransactionState {
+  readonly status: TransactionStatus
+  readonly startedAt: number | null
+}
+
 interface ScriptStatementBase {
   readonly index: number
   readonly sql: string

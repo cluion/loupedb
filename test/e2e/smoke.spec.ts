@@ -113,6 +113,22 @@ end $$;`)
   await expect(page.getByRole('cell', { name: '42', exact: true })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'true', exact: true })).toBeVisible()
 
+  // manual transactions keep every statement on one PostgreSQL connection
+  // until the user explicitly commits or rolls back
+  await expect(page.getByTestId('transaction-status')).toHaveText('自動提交')
+  await page.getByRole('button', { name: '開始交易' }).click()
+  await expect(page.getByTestId('transaction-status')).toHaveText('交易中')
+  await page.locator('.cm-content').fill("update items set label = 'pending' where id = 1")
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByTestId('execution-summary')).toContainText('1 列受影響')
+  await page.locator('.cm-content').fill('select label from items where id = 1')
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'pending', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Rollback 交易' }).click()
+  await expect(page.getByTestId('transaction-status')).toHaveText('自動提交')
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+
   // with two statements, only the one under the cursor runs (fill leaves the
   // cursor at the end, i.e. inside the second statement, which gets highlighted)
   await page.locator('.cm-content').fill("select 'first' as a;\nselect 'second' as b;")

@@ -5,6 +5,7 @@ import type {
   ScriptExecutionResult,
   ScriptStatementResult,
   SqlExecutionResult,
+  TransactionState,
 } from '#shared/types'
 import { listSqlParameterPositions } from '#shared/sqlParameters'
 import { listSqlStatements, type RunnableSql } from '../utils/sqlStatements'
@@ -85,6 +86,9 @@ const formatError = ref<string | null>(null)
 const parameterDialog = ref<QueryParameterDialog | null>(null)
 const running = ref(false)
 const cancelling = ref(false)
+const transactionState = ref<TransactionState>({ status: 'idle', startedAt: null })
+const transactionBusy = ref(false)
+const transactionError = ref<string | null>(null)
 const lastExecution = ref<ExecutionSummary | null>(null)
 let activeRun: ActiveRun | null = null
 let lastParameterizedRun: {
@@ -141,11 +145,49 @@ watch(() => props.connectionId, () => {
   formatError.value = null
   parameterDialog.value = null
   resultVersion.value = 'current'
+  transactionState.value = { status: 'idle', startedAt: null }
+  transactionError.value = null
+  void refreshTransactionState()
 })
 
 // completion metadata for the bound connection - loads lazily, cached per id
 const completion = computed(() => useSqlCompletion(props.connectionId))
 watch(completion, (c) => { c.ensureLoaded() }, { immediate: true })
+onMounted(() => { void refreshTransactionState() })
+
+async function refreshTransactionState(connectionId = props.connectionId) {
+  try {
+    const response = await useQuery(connectionId).transactionStatus()
+    if (props.connectionId !== connectionId) return
+    if (response.ok) {
+      transactionState.value = response.data
+      transactionError.value = null
+    } else {
+      transactionError.value = `取得交易狀態失敗：${response.error.message}`
+    }
+  } catch (cause) {
+    if (props.connectionId !== connectionId) return
+    transactionError.value = `取得交易狀態失敗：${cause instanceof Error ? cause.message : String(cause)}`
+  }
+}
+
+async function changeTransaction(action: 'begin' | 'commit' | 'rollback') {
+  if (transactionBusy.value || activeRun) return
+  const connectionId = props.connectionId
+  transactionBusy.value = true
+  transactionError.value = null
+  try {
+    const response = await useQuery(connectionId).transaction(action)
+    if (props.connectionId !== connectionId) return
+    if (response.ok) transactionState.value = response.data
+    else transactionError.value = response.error.message
+  } catch (cause) {
+    if (props.connectionId !== connectionId) return
+    transactionError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (props.connectionId === connectionId) transactionBusy.value = false
+  }
+}
 
 function updateSql(value: string) {
   sql.value = value
@@ -301,6 +343,8 @@ async function executeRun(executedSql: string, params: ReadonlyArray<unknown>) {
   } catch (err) {
     if (activeRun !== runState) return
     failRun(runState, err instanceof Error ? err.message : String(err))
+  } finally {
+    void refreshTransactionState(runState.connectionId)
   }
 }
 
@@ -355,6 +399,8 @@ async function runScript() {
   } catch (err) {
     if (activeRun !== runState) return
     failRun(runState, err instanceof Error ? err.message : String(err))
+  } finally {
+    void refreshTransactionState(runState.connectionId)
   }
 }
 
@@ -480,6 +526,35 @@ function showResultVersion(version: 'current' | 'previous') {
       <button type="button" aria-label="格式化 SQL" title="⇧⌥F / Shift+Alt+F" @click="formatSql">
         格式化
       </button>
+      <span
+        :class="['transaction-status', transactionState.status]"
+        data-testid="transaction-status"
+      >
+        <template v-if="transactionState.status === 'idle'">自動提交</template>
+        <template v-else-if="transactionState.status === 'active'">交易中</template>
+        <template v-else>交易失敗・需 Rollback</template>
+      </span>
+      <button
+        v-if="transactionState.status === 'idle'"
+        type="button"
+        aria-label="開始交易"
+        :disabled="running || transactionBusy"
+        @click="changeTransaction('begin')"
+      >{{ transactionBusy ? '開始中…' : '開始交易' }}</button>
+      <template v-else>
+        <button
+          type="button"
+          aria-label="Commit 交易"
+          :disabled="running || transactionBusy || transactionState.status === 'failed'"
+          @click="changeTransaction('commit')"
+        >Commit</button>
+        <button
+          type="button"
+          aria-label="Rollback 交易"
+          :disabled="running || transactionBusy"
+          @click="changeTransaction('rollback')"
+        >Rollback</button>
+      </template>
       <span v-if="lastExecution" class="meta" data-testid="execution-summary">
         <template v-if="lastExecution.script">
           <template v-if="lastExecution.status === 'success'">
@@ -528,6 +603,7 @@ function showResultVersion(version: 'current' | 'previous') {
       >前次結果 <small>{{ resultLabel(previousQueryOutput) }}</small></button>
     </div>
     <p v-if="formatError" role="alert" data-testid="format-error">{{ formatError }}</p>
+    <p v-if="transactionError" role="alert" data-testid="transaction-error">{{ transactionError }}</p>
     <p v-if="error && resultVersion === 'current'" role="alert">{{ error }}</p>
     <details v-if="visibleMessages.length" open class="query-messages" data-testid="query-messages">
       <summary>訊息・{{ visibleMessages.length }}</summary>
@@ -617,8 +693,11 @@ function showResultVersion(version: 'current' | 'previous') {
 .parameter-row > input[type="text"] { min-width: 0; flex: 1; }
 .null-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .parameter-actions { justify-content: flex-end; }
-.actions { display: flex; align-items: center; gap: 12px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.transaction-status { font: 11px var(--font-data); color: var(--muted); white-space: nowrap; }
+.transaction-status.active { color: var(--brass); }
+.transaction-status.failed { color: var(--danger); }
 .stop { border-color: var(--danger); color: var(--danger); }
 .stop:hover { border-color: var(--danger); background: rgba(224, 108, 94, 0.1); }
 .result-versions { display: flex; gap: 6px; }

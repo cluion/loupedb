@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setup, $fetch } from '@nuxt/test-utils/e2e'
 import postgres from 'postgres'
 import { startPgContainer, type PgTestHandle } from '../helpers/pg-container'
-import type { Envelope, QueryResult, ScriptExecutionResult } from '#shared/types'
+import type { Envelope, QueryResult, ScriptExecutionResult, TransactionState } from '#shared/types'
 
 process.env.LOUPEDB_MASTER_KEY = 'a'.repeat(64)
 process.env.LOUPEDB_DATA_DIR = mkdtempSync(join(tmpdir(), 'loupedb-api-'))
@@ -55,6 +55,51 @@ describe('query API', async () => {
     })
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.data.rows.map(x => x.label)).toEqual(['b'])
+  })
+
+  it('manages a connection-level manual transaction', async () => {
+    const status = await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`)
+    expect(status).toEqual({ ok: true, data: { status: 'idle', startedAt: null } })
+
+    const begin = await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`, {
+      method: 'POST', body: { action: 'begin' },
+    })
+    expect(begin.ok && begin.data.status).toBe('active')
+    await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST', body: { sql: "update items set label = 'pending' where id = 2" },
+    })
+    const inside = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST', body: { sql: 'select label from items where id = 2' },
+    })
+    expect(inside.ok && inside.data.rows).toEqual([{ label: 'pending' }])
+
+    const rollback = await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`, {
+      method: 'POST', body: { action: 'rollback' },
+    })
+    expect(rollback).toEqual({ ok: true, data: { status: 'idle', startedAt: null } })
+    const after = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST', body: { sql: 'select label from items where id = 2' },
+    })
+    expect(after.ok && after.data.rows).toEqual([{ label: 'b' }])
+  })
+
+  it('reports an aborted transaction until rollback', async () => {
+    await $fetch(`/api/connections/${connId}/transaction`, {
+      method: 'POST', body: { action: 'begin' },
+    })
+    const failed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/query`, {
+      method: 'POST', body: { sql: 'select * from missing_in_transaction' },
+    })
+    expect(failed.ok).toBe(false)
+    const status = await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`)
+    expect(status.ok && status.data.status).toBe('failed')
+    const commit = await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`, {
+      method: 'POST', body: { action: 'commit' },
+    })
+    expect(!commit.ok && commit.error.code).toBe('TX_FAILED')
+    await $fetch(`/api/connections/${connId}/transaction`, {
+      method: 'POST', body: { action: 'rollback' },
+    })
   })
 
   it('POST /query returns PostgreSQL notices and warnings', async () => {

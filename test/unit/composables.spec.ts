@@ -77,6 +77,16 @@ describe('useQuery', () => {
     })
   })
 
+  it('gets transaction status and posts transaction actions', async () => {
+    const query = useQuery('c1')
+    await query.transactionStatus()
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/transaction')
+    await query.transaction('rollback')
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/transaction', {
+      method: 'POST', body: { action: 'rollback' },
+    })
+  })
+
   it('browse posts schema/table/opts', async () => {
     const opts = { limit: 10, offset: 0 }
     await useQuery('c1').browse('public', 'items', opts)

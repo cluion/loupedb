@@ -3,16 +3,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import SqlEditor from '../../app/components/SqlEditor.vue'
 
-const { executeMock, executeScriptMock, cancelMock, formatSqlMock } = vi.hoisted(() => ({
+const {
+  executeMock, executeScriptMock, cancelMock, transactionStatusMock, transactionMock, formatSqlMock,
+} = vi.hoisted(() => ({
   executeMock: vi.fn(),
   executeScriptMock: vi.fn(),
   cancelMock: vi.fn(),
+  transactionStatusMock: vi.fn(),
+  transactionMock: vi.fn(),
   formatSqlMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   execute: executeMock,
   executeScript: executeScriptMock,
+  transactionStatus: transactionStatusMock,
+  transaction: transactionMock,
   browse: vi.fn(), cancel: cancelMock, streamUrl: vi.fn(),
 }))
 
@@ -36,6 +42,15 @@ beforeEach(() => {
     data: { kind: 'script', status: 'success', totalStatements: 0, statements: [], executionMs: 0 },
   })
   cancelMock.mockReset().mockResolvedValue({ ok: true as const, data: undefined })
+  transactionStatusMock.mockReset().mockResolvedValue({
+    ok: true as const, data: { status: 'idle' as const, startedAt: null },
+  })
+  transactionMock.mockReset().mockImplementation(async (action: 'begin' | 'commit' | 'rollback') => ({
+    ok: true as const,
+    data: action === 'begin'
+      ? { status: 'active' as const, startedAt: 1 }
+      : { status: 'idle' as const, startedAt: null },
+  }))
   formatSqlMock.mockReset().mockReturnValue(true)
 })
 
@@ -58,6 +73,43 @@ describe('SqlEditor', () => {
   it('renders the code editor bound via v-model', async () => {
     const w = await mountSuspended(SqlEditor, mountOpts)
     expect(w.findComponent(SqlCodeEditorStub).exists()).toBe(true)
+  })
+
+  it('starts, commits and rolls back a manual transaction with visible state', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toBe('自動提交'))
+
+    await w.get('[aria-label="開始交易"]').trigger('click')
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toBe('交易中'))
+    expect(transactionMock).toHaveBeenCalledWith('begin')
+    expect(w.get('[aria-label="Commit 交易"]').exists()).toBe(true)
+    expect(w.get('[aria-label="Rollback 交易"]').exists()).toBe(true)
+
+    await w.get('[aria-label="Commit 交易"]').trigger('click')
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toBe('自動提交'))
+    expect(transactionMock).toHaveBeenCalledWith('commit')
+
+    await w.get('[aria-label="開始交易"]').trigger('click')
+    await vi.waitFor(() => expect(w.get('[aria-label="Rollback 交易"]').exists()).toBe(true))
+    await w.get('[aria-label="Rollback 交易"]').trigger('click')
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toBe('自動提交'))
+    expect(transactionMock).toHaveBeenCalledWith('rollback')
+  })
+
+  it('requires rollback after a failed transaction query', async () => {
+    transactionStatusMock
+      .mockResolvedValueOnce({ ok: true, data: { status: 'active', startedAt: 1 } })
+      .mockResolvedValue({ ok: true, data: { status: 'failed', startedAt: 1 } })
+    executeMock.mockResolvedValueOnce({
+      ok: false, error: { code: '42P01', message: 'missing table', severity: 'error', retryable: false },
+    })
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toBe('交易中'))
+    await w.get('button.primary').trigger('click')
+
+    await vi.waitFor(() => expect(w.get('[data-testid="transaction-status"]').text()).toContain('需 Rollback'))
+    expect(w.get('[aria-label="Commit 交易"]').attributes()).toHaveProperty('disabled')
+    expect(w.get('[aria-label="Rollback 交易"]').attributes()).not.toHaveProperty('disabled')
   })
 
   it('emits SQL edits and keeps the rendered result local to its tab', async () => {

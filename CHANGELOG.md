@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Manual Transaction Mode**：每個 connection 可由 SQL 工作台開始交易，後續 statement、參數查詢與完整 script 固定使用同一條 PostgreSQL connection；介面明確顯示自動提交、交易中或交易失敗，提供 Commit／Rollback，查詢失敗或取消後要求先 Rollback，中斷連線時自動回滾
+
 ## [0.7.0] - 2026-07-18
 
 ### Added

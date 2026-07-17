@@ -1,4 +1,4 @@
-import type { BrowseOpts, Envelope, QueryResult, ScriptExecutionResult } from '#shared/types'
+import type { BrowseOpts, Envelope, QueryResult, ScriptExecutionResult, TransactionState } from '#shared/types'
 
 export function useQuery(connId: string) {
   return {
@@ -10,6 +10,14 @@ export function useQuery(connId: string) {
     async executeScript(sql: string, queryId?: string) {
       return await $fetch<Envelope<ScriptExecutionResult>>(`/api/connections/${connId}/script`, {
         method: 'POST', body: { sql, queryId },
+      })
+    },
+    async transactionStatus() {
+      return await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`)
+    },
+    async transaction(action: 'begin' | 'commit' | 'rollback') {
+      return await $fetch<Envelope<TransactionState>>(`/api/connections/${connId}/transaction`, {
+        method: 'POST', body: { action },
       })
     },
     async browse(schema: string, table: string, opts: BrowseOpts) {

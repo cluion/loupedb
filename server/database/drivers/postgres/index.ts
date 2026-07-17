@@ -1,15 +1,63 @@
-import type { ConnectionConfig, ConnectionStatus, BrowseOpts } from '#shared/types'
+import type { ConnectionConfig, ConnectionStatus, BrowseOpts, TransactionState } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
-import { createConnection, type PostgresHandle } from './connection'
+import { createConnection, type PostgresHandle, type PostgresSession } from './connection'
 import { listDatabases, listSchemas, listTables, listColumns, describeTable } from './schema'
 import { executeUnsafe, browseTable, type CancellableQuery } from './query'
 import { cancelQuery, streamTable } from './stream'
+
+function withoutLeadingComments(source: string): string {
+  let sql = source
+  while (true) {
+    const trimmed = sql.trimStart()
+    if (trimmed.startsWith('--')) {
+      const newline = trimmed.indexOf('\n')
+      sql = newline < 0 ? '' : trimmed.slice(newline + 1)
+      continue
+    }
+    if (trimmed.startsWith('/*')) {
+      const closing = trimmed.indexOf('*/', 2)
+      if (closing < 0) return trimmed
+      sql = trimmed.slice(closing + 2)
+      continue
+    }
+    return trimmed
+  }
+}
+
+function isTransactionBoundary(source: string): boolean {
+  return /^(?:begin\b|start\s+transaction\b|commit\b|end\b|rollback\b|abort\b|prepare\s+transaction\b)/i
+    .test(withoutLeadingComments(source))
+}
 
 export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
   let handle: PostgresHandle | null = null
   let status: ConnectionStatus = 'closed' // per-instance state via closure
   const activeQueries = new Map<string, CancellableQuery>()
   const oidCache = new Map<number, string>()
+  let transaction: {
+    readonly session: PostgresSession
+    readonly startedAt: number
+    status: 'active' | 'failed'
+  } | null = null
+  let transactionQueue = Promise.resolve()
+
+  async function acquireTransactionLock(): Promise<() => void> {
+    const previous = transactionQueue
+    let release!: () => void
+    transactionQueue = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    return release
+  }
+
+  function transactionState(): TransactionState {
+    return transaction
+      ? { status: transaction.status, startedAt: transaction.startedAt }
+      : { status: 'idle', startedAt: null }
+  }
+
+  function transactionError(code: string, message: string): Error {
+    return Object.assign(new Error(message), { code, severity: 'ERROR' })
+  }
 
   return {
     config,
@@ -25,7 +73,17 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
       }
     },
     async disconnect() {
-      if (handle) { await handle.close(); handle = null }
+      const unlock = await acquireTransactionLock()
+      try {
+        if (transaction) {
+          try { await transaction.session.sql.unsafe('rollback') } catch { /* closing the connection also rolls back */ }
+          transaction.session.release()
+          transaction = null
+        }
+        if (handle) { await handle.close(); handle = null }
+      } finally {
+        unlock()
+      }
       status = 'closed'
     },
     get status() { return status },
@@ -53,7 +111,27 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
 
     async execute(sqlText: string, params: ReadonlyArray<unknown> = [], queryId?: string) {
       if (!handle) throw new Error('not connected')
-      const session = await handle.reserve()
+      if (isTransactionBoundary(sqlText)) {
+        throw transactionError('TX_CONTROL', 'use the transaction controls to begin, commit or rollback')
+      }
+      const currentHandle = handle
+      const unlock = await acquireTransactionLock()
+      if (transaction) {
+        const current = transaction
+        try {
+          return await executeUnsafe(
+            current.session.sql, sqlText, params, queryId, activeQueries, oidCache,
+            current.session.takeMessages,
+          )
+        } catch (cause) {
+          current.status = 'failed'
+          throw cause
+        } finally {
+          unlock()
+        }
+      }
+      unlock()
+      const session = await currentHandle.reserve()
       try {
         return await executeUnsafe(
           session.sql, sqlText, params, queryId, activeQueries, oidCache, session.takeMessages,
@@ -64,7 +142,31 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
     },
     async* executeScript(statements: ReadonlyArray<string>, queryId?: string) {
       if (!handle) throw new Error('not connected')
-      const session = await handle.reserve()
+      const currentHandle = handle
+      const unlock = await acquireTransactionLock()
+      if (transaction) {
+        const current = transaction
+        if (statements.some(isTransactionBoundary)) {
+          unlock()
+          throw transactionError('TX_CONTROL', 'transaction control statements cannot run inside manual mode')
+        }
+        try {
+          for (const statement of statements) {
+            yield await executeUnsafe(
+              current.session.sql, statement, [], queryId, activeQueries, oidCache,
+              current.session.takeMessages,
+            )
+          }
+        } catch (cause) {
+          current.status = 'failed'
+          throw cause
+        } finally {
+          unlock()
+        }
+        return
+      }
+      unlock()
+      const session = await currentHandle.reserve()
       try {
         for (const statement of statements) {
           yield await executeUnsafe(
@@ -76,6 +178,68 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
         // transaction. Outside a transaction PostgreSQL treats this as a no-op.
         try { await session.sql.unsafe('rollback') } catch { /* connection failure already makes it unusable */ }
         session.release()
+      }
+    },
+    transactionStatus() {
+      return transactionState()
+    },
+    async beginTransaction() {
+      if (!handle) throw new Error('not connected')
+      const currentHandle = handle
+      const unlock = await acquireTransactionLock()
+      try {
+        if (transaction) return transactionState()
+        const session = await currentHandle.reserve()
+        try {
+          await session.sql.unsafe('begin')
+          session.takeMessages()
+          transaction = { session, status: 'active', startedAt: Date.now() }
+          return transactionState()
+        } catch (cause) {
+          session.release()
+          throw cause
+        }
+      } finally {
+        unlock()
+      }
+    },
+    async commitTransaction() {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!transaction) return transactionState()
+        if (transaction.status === 'failed') {
+          throw transactionError('TX_FAILED', 'transaction is aborted; rollback is required')
+        }
+        const current = transaction
+        try {
+          await current.session.sql.unsafe('commit')
+          current.session.takeMessages()
+          transaction = null
+          current.session.release()
+          return transactionState()
+        } catch (cause) {
+          current.status = 'failed'
+          throw cause
+        }
+      } finally {
+        unlock()
+      }
+    },
+    async rollbackTransaction() {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!transaction) return transactionState()
+        const current = transaction
+        try {
+          await current.session.sql.unsafe('rollback')
+          current.session.takeMessages()
+        } finally {
+          transaction = null
+          current.session.release()
+        }
+        return transactionState()
+      } finally {
+        unlock()
       }
     },
     async browse(schema: string, table: string, opts: BrowseOpts, queryId?: string) {

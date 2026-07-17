@@ -45,6 +45,63 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('keeps statements and scripts on one manual transaction until rollback', async () => {
+    const driver = await setup()
+    expect(driver.transactionStatus()).toEqual({ status: 'idle', startedAt: null })
+    expect((await driver.beginTransaction()).status).toBe('active')
+
+    await driver.execute('update items set qty = 77 where id = 1')
+    const scriptResults = []
+    for await (const result of driver.executeScript([
+      'update items set label = upper(label) where id = 1',
+      'select label, qty from items where id = 1',
+    ])) scriptResults.push(result)
+    expect(scriptResults[1]?.rows).toEqual([{ label: 'A', qty: 77 }])
+
+    const outside = await driver.browse('public', 'items', { limit: 1, offset: 0, orderBy: 'id' })
+    expect(outside.rows[0]).toMatchObject({ label: 'a', qty: 1 })
+    expect(await driver.rollbackTransaction()).toEqual({ status: 'idle', startedAt: null })
+    const after = await driver.execute('select label, qty from items where id = 1')
+    expect(after.rows).toEqual([{ label: 'a', qty: 1 }])
+    await driver.disconnect()
+  })
+
+  it('commits a manual transaction', async () => {
+    const driver = await setup()
+    await driver.beginTransaction()
+    await driver.execute('update items set qty = 88 where id = 1')
+    expect(await driver.commitTransaction()).toEqual({ status: 'idle', startedAt: null })
+    const after = await driver.execute('select qty from items where id = 1')
+    expect(after.rows).toEqual([{ qty: 88 }])
+    await driver.disconnect()
+  })
+
+  it('marks a failed manual transaction and requires rollback', async () => {
+    const driver = await setup()
+    await driver.beginTransaction()
+    await expect(driver.execute('select * from missing_transaction_table')).rejects.toMatchObject({ code: '42P01' })
+    expect(driver.transactionStatus().status).toBe('failed')
+    await expect(driver.commitTransaction()).rejects.toMatchObject({ code: 'TX_FAILED' })
+    expect((await driver.rollbackTransaction()).status).toBe('idle')
+    await expect(driver.execute('select 1')).resolves.toMatchObject({ rows: [{ '?column?': 1 }] })
+    await driver.disconnect()
+  })
+
+  it('keeps transaction boundary SQL on the safe control path', async () => {
+    const driver = await setup()
+    await expect(driver.execute('/* leading */ commit')).rejects.toMatchObject({ code: 'TX_CONTROL' })
+    expect(driver.transactionStatus().status).toBe('idle')
+
+    await driver.beginTransaction()
+    await expect(driver.execute('rollback')).rejects.toMatchObject({ code: 'TX_CONTROL' })
+    expect(driver.transactionStatus().status).toBe('active')
+    const script = driver.executeScript(['select 1', 'commit'])[Symbol.asyncIterator]()
+    await expect(script.next()).rejects.toMatchObject({ code: 'TX_CONTROL' })
+    expect(driver.transactionStatus().status).toBe('active')
+    await driver.rollbackTransaction()
+    await driver.disconnect()
+  })
+
   it('captures notices per concurrent query, script statement and failed query', async () => {
     const driver = await setup()
     const [first, second] = await Promise.all([

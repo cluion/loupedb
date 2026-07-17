@@ -1,4 +1,4 @@
-import type { ConnectionConfig, ConnectionStatus, DatabaseInfo, QueryResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, BrowseOpts } from '#shared/types'
+import type { ConnectionConfig, ConnectionStatus, DatabaseInfo, QueryResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, BrowseOpts, TransactionState } from '#shared/types'
 
 export interface DatabaseDriver {
   readonly config: ConnectionConfig
@@ -12,6 +12,10 @@ export interface DatabaseDriver {
   describeTable(schema: string, table: string): Promise<TableSchema>
   execute(sql: string, params?: ReadonlyArray<unknown>, queryId?: string): Promise<QueryResult>
   executeScript(statements: ReadonlyArray<string>, queryId?: string): AsyncIterable<QueryResult>
+  transactionStatus(): TransactionState
+  beginTransaction(): Promise<TransactionState>
+  commitTransaction(): Promise<TransactionState>
+  rollbackTransaction(): Promise<TransactionState>
   browse(schema: string, table: string, opts: BrowseOpts, queryId?: string): Promise<QueryResult>
   cancel(queryId: string): Promise<void>
   stream(schema: string, table: string, opts: BrowseOpts, batchSize: number, queryId?: string): AsyncIterable<ReadonlyArray<Record<string, unknown>>>
