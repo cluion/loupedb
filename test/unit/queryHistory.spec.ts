@@ -11,7 +11,7 @@ import {
 function entry(id: string, over: Partial<QueryHistoryEntry> = {}): QueryHistoryEntry {
   return {
     id, sql: `select ${id};`, database: 'appdb', at: 1000,
-    durationMs: 5, rowCount: 1, ok: true, ...over,
+    durationMs: 5, rowCount: 1, affectedRows: null, status: 'success', ...over,
   }
 }
 
@@ -34,8 +34,19 @@ describe('addHistoryEntry', () => {
 
 describe('restoreQueryHistory', () => {
   it('round-trips a serialized list', () => {
-    const list = [entry('a'), entry('b', { ok: false, durationMs: null, rowCount: null })]
+    const list = [entry('a'), entry('b', { status: 'error', durationMs: null, rowCount: null })]
     expect(restoreQueryHistory(JSON.stringify(list))).toEqual(list)
+  })
+
+  it('migrates v0.2 ok booleans to explicit execution statuses', () => {
+    const legacy = {
+      id: 'old', sql: 'select 1;', database: 'appdb', at: 1000,
+      durationMs: 5, rowCount: 1, ok: true,
+    }
+    expect(restoreQueryHistory(JSON.stringify([legacy]))).toEqual([{
+      id: 'old', sql: 'select 1;', database: 'appdb', at: 1000,
+      durationMs: 5, rowCount: 1, affectedRows: null, status: 'success',
+    }])
   })
 
   it('returns null for malformed payloads', () => {
@@ -48,9 +59,12 @@ describe('restoreQueryHistory', () => {
 describe('useQueryHistory', () => {
   it('records executions and persists them per connection label', () => {
     const h = useQueryHistory('prod')
-    h.add({ sql: 'select 1;', database: 'appdb', durationMs: 7, rowCount: 3, ok: true })
+    h.add({
+      sql: 'select 1;', database: 'appdb', at: 1000, durationMs: 7,
+      rowCount: 3, affectedRows: null, status: 'success',
+    })
     expect(h.entries.value).toHaveLength(1)
-    expect(h.entries.value[0]).toMatchObject({ sql: 'select 1;', ok: true, rowCount: 3 })
+    expect(h.entries.value[0]).toMatchObject({ sql: 'select 1;', status: 'success', rowCount: 3 })
     expect(h.entries.value[0]!.id).toBeTypeOf('string')
 
     const raw = localStorage.getItem('loupedb:query-history:v1:prod')
@@ -59,13 +73,19 @@ describe('useQueryHistory', () => {
   })
 
   it('keeps different connection labels apart', () => {
-    useQueryHistory('one').add({ sql: 'select 1;', database: null, durationMs: 1, rowCount: 0, ok: true })
+    useQueryHistory('one').add({
+      sql: 'select 1;', database: null, at: 1000, durationMs: 1,
+      rowCount: 0, affectedRows: null, status: 'success',
+    })
     expect(useQueryHistory('two').entries.value).toHaveLength(0)
   })
 
   it('clear empties the list and the storage', () => {
     const h = useQueryHistory('wipe')
-    h.add({ sql: 'select 1;', database: null, durationMs: 1, rowCount: 0, ok: true })
+    h.add({
+      sql: 'select 1;', database: null, at: 1000, durationMs: 1,
+      rowCount: 0, affectedRows: null, status: 'success',
+    })
     h.clear()
     expect(h.entries.value).toEqual([])
     expect(localStorage.getItem('loupedb:query-history:v1:wipe')).toBeNull()

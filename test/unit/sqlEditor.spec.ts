@@ -3,20 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import SqlEditor from '../../app/components/SqlEditor.vue'
 
-const { executeMock } = vi.hoisted(() => ({
-  executeMock: vi.fn(async () => ({
-    ok: true as const,
-    data: {
-      columns: [{ name: 'one', nativeType: 'int4', type: 'integer' as const, nullable: true }],
-      rows: [{ one: 1 }],
-      executionMs: 3,
-    },
-  })),
+const { executeMock, cancelMock } = vi.hoisted(() => ({
+  executeMock: vi.fn(),
+  cancelMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   execute: executeMock,
-  browse: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
+  browse: vi.fn(), cancel: cancelMock, streamUrl: vi.fn(),
 }))
 
 const { ensureLoadedMock } = vi.hoisted(() => ({ ensureLoadedMock: vi.fn(async () => {}) }))
@@ -26,7 +20,15 @@ mockNuxtImport('useSqlCompletion', () => () => ({
 }))
 
 beforeEach(() => {
-  executeMock.mockClear()
+  executeMock.mockReset().mockResolvedValue({
+    ok: true as const,
+    data: {
+      columns: [{ name: 'one', nativeType: 'int4', type: 'integer' as const, nullable: true }],
+      rows: [{ one: 1 }],
+      executionMs: 3,
+    },
+  })
+  cancelMock.mockReset().mockResolvedValue({ ok: true as const, data: undefined })
 })
 
 // CodeMirror needs a real browser - unit tests drive the same v-model contract
@@ -54,6 +56,7 @@ describe('SqlEditor', () => {
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 1 as one')
+    expect(executeMock.mock.calls[0]![1]).toEqual(expect.any(String))
     expect(w.emitted('update:result')?.at(-1)?.[0]).toMatchObject({ rows: [{ one: 1 }] })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true)) // result rendered inline
     expect(w.find('tbody td').text()).toBe('1')
@@ -115,20 +118,59 @@ describe('SqlEditor', () => {
     await w.find('textarea').setValue('select 1 as one')
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(w.emitted('executed')).toBeTruthy())
-    expect(w.emitted('executed')![0]![0]).toEqual({
-      sql: 'select 1 as one', ok: true, durationMs: 3, rowCount: 1,
+    expect(w.emitted('executed')![0]![0]).toMatchObject({
+      sql: 'select 1 as one', status: 'success', durationMs: 3, rowCount: 1, affectedRows: null,
     })
+    expect((w.emitted('executed')![0]![0] as { startedAt: number }).startedAt).toBeTypeOf('number')
   })
 
-  it('reports a failed execution with null duration and row count', async () => {
+  it('reports a failed execution with elapsed duration and no row counts', async () => {
     executeMock.mockResolvedValueOnce({
       ok: false, error: { code: '42P01', message: 'no such table', severity: 'error', retryable: false },
     } as never)
     const w = await mountSuspended(SqlEditor, mountOpts)
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(w.emitted('executed')).toBeTruthy())
-    expect(w.emitted('executed')![0]![0]).toEqual({
-      sql: 'SELECT * FROM ', ok: false, durationMs: null, rowCount: null,
+    expect(w.emitted('executed')![0]![0]).toMatchObject({
+      sql: 'SELECT * FROM ', status: 'error', rowCount: null, affectedRows: null,
+    })
+    expect((w.emitted('executed')![0]![0] as { durationMs: number }).durationMs).toBeTypeOf('number')
+  })
+
+  it('passes a client query id to execute and cancels that exact query', async () => {
+    let resolveQuery!: (value: unknown) => void
+    executeMock.mockImplementationOnce(() => new Promise((resolve) => { resolveQuery = resolve }))
+    const w = await mountSuspended(SqlEditor, mountOpts)
+
+    await w.find('button.primary').trigger('click')
+    await vi.waitFor(() => expect(w.get('[aria-label="停止查詢"]').text()).toBe('停止'))
+    const queryId = executeMock.mock.calls[0]![1] as string
+    await w.get('[aria-label="停止查詢"]').trigger('click')
+    expect(cancelMock).toHaveBeenCalledWith(queryId)
+    await vi.waitFor(() => expect(w.get('[aria-label="停止查詢"]').text()).toBe('取消中…'))
+
+    resolveQuery({
+      ok: false,
+      error: { code: '57014', message: 'canceling statement due to user request', severity: 'error', retryable: false },
+    })
+    await vi.waitFor(() => expect(w.get('[data-testid="execution-summary"]').text()).toContain('已取消'))
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    expect(w.emitted('executed')?.at(-1)?.[0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('shows affected rows, start time and duration for statements without a result set', async () => {
+    executeMock.mockResolvedValueOnce({
+      ok: true,
+      data: { columns: [], rows: [], rowCount: 0, affectedRows: 2, executionMs: 8 },
+    })
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('button.primary').trigger('click')
+    await vi.waitFor(() => expect(w.get('[data-testid="execution-summary"]').text()).toContain('2 列受影響'))
+    const summary = w.get('[data-testid="execution-summary"]').text()
+    expect(summary).toContain('開始')
+    expect(summary).toContain('8 ms')
+    expect(w.emitted('executed')?.at(-1)?.[0]).toMatchObject({
+      status: 'success', rowCount: null, affectedRows: 2,
     })
   })
 

@@ -1,14 +1,17 @@
+export type QueryHistoryStatus = 'success' | 'error' | 'cancelled'
+
 export interface QueryHistoryEntry {
   readonly id: string
   readonly sql: string
   readonly database: string | null
   readonly at: number
-  readonly durationMs: number | null // null when the execution failed
+  readonly durationMs: number | null // legacy entries may not have failure duration
   readonly rowCount: number | null
-  readonly ok: boolean
+  readonly affectedRows: number | null
+  readonly status: QueryHistoryStatus
 }
 
-export type QueryHistoryInput = Omit<QueryHistoryEntry, 'id' | 'at'>
+export type QueryHistoryInput = Omit<QueryHistoryEntry, 'id'>
 
 export const QUERY_HISTORY_LIMIT = 200
 // keyed by connection *name*, not session id - session ids change on every
@@ -25,21 +28,46 @@ export function addHistoryEntry(
   return [entry, ...list].slice(0, QUERY_HISTORY_LIMIT)
 }
 
-function isEntry(value: unknown): value is QueryHistoryEntry {
-  if (!value || typeof value !== 'object') return false
+function restoreEntry(value: unknown): QueryHistoryEntry | null {
+  if (!value || typeof value !== 'object') return null
   const e = value as Record<string, unknown>
-  return typeof e.id === 'string' && typeof e.sql === 'string'
+  const baseIsValid = typeof e.id === 'string' && typeof e.sql === 'string'
     && (e.database === null || typeof e.database === 'string')
     && typeof e.at === 'number'
     && (e.durationMs === null || typeof e.durationMs === 'number')
     && (e.rowCount === null || typeof e.rowCount === 'number')
-    && typeof e.ok === 'boolean'
+  if (!baseIsValid) return null
+
+  // v0.2 stored only `ok`; keep those histories while moving to an explicit
+  // three-state model that can distinguish user cancellation from errors.
+  const status: QueryHistoryStatus | null = e.status === 'success' || e.status === 'error' || e.status === 'cancelled'
+    ? e.status
+    : typeof e.ok === 'boolean'
+      ? e.ok ? 'success' : 'error'
+      : null
+  if (!status) return null
+  const affectedRows = e.affectedRows === undefined || e.affectedRows === null
+    ? null
+    : typeof e.affectedRows === 'number' ? e.affectedRows : undefined
+  if (affectedRows === undefined) return null
+  return {
+    id: e.id as string,
+    sql: e.sql as string,
+    database: e.database as string | null,
+    at: e.at as number,
+    durationMs: e.durationMs as number | null,
+    rowCount: e.rowCount as number | null,
+    affectedRows,
+    status,
+  }
 }
 
 export function restoreQueryHistory(raw: string): ReadonlyArray<QueryHistoryEntry> | null {
   try {
     const parsed = JSON.parse(raw) as unknown
-    return Array.isArray(parsed) && parsed.every(isEntry) ? parsed : null
+    if (!Array.isArray(parsed)) return null
+    const entries = parsed.map(restoreEntry)
+    return entries.every((entry) => entry !== null) ? entries as QueryHistoryEntry[] : null
   } catch {
     return null
   }
@@ -68,7 +96,7 @@ export function useQueryHistory(label: string) {
   return {
     entries,
     add: (input: QueryHistoryInput) => {
-      entries.value = addHistoryEntry(entries.value, { ...input, id: createId(), at: Date.now() })
+      entries.value = addHistoryEntry(entries.value, { ...input, id: createId() })
       persist()
     },
     clear: () => {

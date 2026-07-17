@@ -41,5 +41,6 @@ describe('cancel API', async () => {
     expect(cancel.ok).toBe(true)
     const result = await long
     expect(result.ok).toBe(false) // query was cancelled, envelope carries the error
+    if (!result.ok) expect(result.error.code).toBe('57014')
   })
 })

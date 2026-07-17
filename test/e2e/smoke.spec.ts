@@ -60,7 +60,21 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '執行選取', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
 
+  // a client-generated query id connects the editor stop button to the
+  // existing server-side cancellation pipeline
+  await page.locator('.cm-content').fill('select pg_sleep(10)')
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止查詢' })).toBeVisible()
+  // let postgres.js register the in-flight handle before sending cancel
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: '停止查詢' }).click()
+  await expect(page.getByTestId('execution-summary')).toContainText('已取消')
+  await expect(page.getByRole('button', { name: '執行', exact: true })).toBeVisible()
+
   // the loaded result downloads as a CSV file
+  await page.locator('.cm-content').fill("select 'first' as a")
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'first', exact: true })).toBeVisible()
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     page.locator('.editor').getByRole('button', { name: '下載結果' }).click(),
@@ -72,6 +86,7 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // history drawer lists past executions, newest first, and reopens one in a new tab
   await page.getByRole('button', { name: '查詢歷史' }).click()
   await expect(page.getByTestId('history-entry').first()).toContainText("select 'first' as a")
+  await expect(page.getByTestId('history-entry').filter({ hasText: 'select pg_sleep(10)' })).toContainText('已取消')
   const tabsBefore = await page.getByRole('tab').count()
   await page.getByTestId('history-entry').first().click()
   await expect(page.getByRole('tab')).toHaveCount(tabsBefore + 1)

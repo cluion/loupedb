@@ -103,8 +103,16 @@ function toggleDrawer(kind: 'history' | 'saved') {
   if (drawer.value === 'saved') loadSaved()
 }
 
-function onExecuted(outcome: { sql: string, ok: boolean, durationMs: number | null, rowCount: number | null }) {
-  history.add({ ...outcome, database: workspace.activeTab.value?.database ?? null })
+function onExecuted(outcome: {
+  sql: string
+  status: 'success' | 'error' | 'cancelled'
+  startedAt: number
+  durationMs: number
+  rowCount: number | null
+  affectedRows: number | null
+}) {
+  const { startedAt, ...entry } = outcome
+  history.add({ ...entry, at: startedAt, database: workspace.activeTab.value?.database ?? null })
 }
 
 // loading always opens a new tab - a click must never clobber a draft
@@ -238,8 +246,8 @@ function timeLabel(at: number): string {
           @click="openInNewTab(e.sql)"
         >
           <span class="entry-meta">
-            <i class="dot" :class="e.ok ? 'ok' : 'fail'" />
-            {{ timeLabel(e.at) }}<template v-if="e.durationMs !== null">・{{ Math.round(e.durationMs) }} ms</template><template v-if="e.rowCount !== null">・{{ e.rowCount }} 列</template><template v-if="e.database">・{{ e.database }}</template>
+            <i class="dot" :class="e.status === 'success' ? 'ok' : e.status === 'cancelled' ? 'cancel' : 'fail'" />
+            {{ timeLabel(e.at) }}<template v-if="e.status === 'cancelled'">・已取消</template><template v-else-if="e.status === 'error'">・失敗</template><template v-if="e.durationMs !== null">・{{ Math.round(e.durationMs) }} ms</template><template v-if="e.rowCount !== null">・{{ e.rowCount }} 列</template><template v-else-if="e.affectedRows !== null">・影響 {{ e.affectedRows }} 列</template><template v-if="e.database">・{{ e.database }}</template>
           </span>
           <code class="entry-sql">{{ e.sql }}</code>
         </button>
@@ -407,6 +415,7 @@ function timeLabel(at: number): string {
 }
 .dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
 .dot.ok { background: #86b98d; }
+.dot.cancel { background: var(--brass); }
 .dot.fail { background: var(--danger); }
 
 .saved-item { display: flex; align-items: stretch; gap: 4px; }

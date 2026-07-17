@@ -132,7 +132,8 @@ describe('SqlWorkspace history drawer', () => {
   it('records editor executions and lists them in the drawer', async () => {
     const w = await mountWorkspace('ws-hist-record', 'hist-record')
     w.getComponent(SqlEditorStub).vm.$emit('executed', {
-      sql: 'select 7 as seven;', ok: true, durationMs: 12, rowCount: 1,
+      sql: 'select 7 as seven;', status: 'success', startedAt: 1000,
+      durationMs: 12, rowCount: 1, affectedRows: null,
     })
     await nextTick()
     await w.get('[aria-label="查詢歷史"]').trigger('click')
@@ -142,7 +143,8 @@ describe('SqlWorkspace history drawer', () => {
 
   it('opens a history entry in a new tab without touching the current draft', async () => {
     useQueryHistory('hist-open').add({
-      sql: 'select 8 as eight;', database: 'appdb', durationMs: 4, rowCount: 1, ok: true,
+      sql: 'select 8 as eight;', database: 'appdb', at: 1000, durationMs: 4,
+      rowCount: 1, affectedRows: null, status: 'success',
     })
     const w = await mountWorkspace('ws-hist-open', 'hist-open')
     await w.get('[aria-label="查詢歷史"]').trigger('click')
@@ -153,7 +155,8 @@ describe('SqlWorkspace history drawer', () => {
 
   it('clears the history list', async () => {
     useQueryHistory('hist-clear').add({
-      sql: 'select 1;', database: null, durationMs: 1, rowCount: 0, ok: true,
+      sql: 'select 1;', database: null, at: 1000, durationMs: 1,
+      rowCount: 0, affectedRows: null, status: 'success',
     })
     const w = await mountWorkspace('ws-hist-clear', 'hist-clear')
     await w.get('[aria-label="查詢歷史"]').trigger('click')

@@ -13,16 +13,37 @@ const emit = defineEmits<{
   'update:result': [result: QueryResult | null]
   executed: [outcome: {
     sql: string
-    ok: boolean
-    durationMs: number | null
+    status: 'success' | 'error' | 'cancelled'
+    startedAt: number
+    durationMs: number
     rowCount: number | null
+    affectedRows: number | null
   }]
 }>()
+
+interface ActiveRun {
+  readonly queryId: string
+  readonly connectionId: string
+  readonly sql: string
+  readonly startedAt: number
+  cancelRequested: boolean
+}
+
+interface ExecutionSummary {
+  readonly status: 'success' | 'error' | 'cancelled'
+  readonly startedAt: number
+  readonly durationMs: number
+  readonly rowCount: number | null
+  readonly affectedRows: number | null
+}
 
 const sql = ref(props.modelValue)
 const queryResult = ref<QueryResult | null>(props.result)
 const error = ref<string | null>(null)
 const running = ref(false)
+const cancelling = ref(false)
+const lastExecution = ref<ExecutionSummary | null>(null)
+let activeRun: ActiveRun | null = null
 // what ⌘⏎ / the run button would execute right now, reported by the editor:
 // the selection when one exists, otherwise the statement under the cursor
 const runnable = ref<RunnableSql | null>(null)
@@ -42,26 +63,108 @@ function updateSql(value: string) {
   emit('update:modelValue', value)
 }
 
+function createQueryId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `query-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function elapsedSince(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt)
+}
+
+function finish(run: ActiveRun, summary: ExecutionSummary): void {
+  if (activeRun !== run) return
+  lastExecution.value = summary
+  activeRun = null
+  running.value = false
+  cancelling.value = false
+  emit('executed', { sql: run.sql, ...summary })
+}
+
 async function run(target: RunnableSql | null = runnable.value) {
+  // Mod-Enter can still emit while the button is disabled; never overlap two
+  // requests inside one editor instance.
+  if (activeRun) return
   error.value = null
   queryResult.value = null
+  lastExecution.value = null
   emit('update:result', null)
-  running.value = true
-  // Resolve from the latest prop: rebinding a tab to another database must not
-  // leave a closure executing against the previous connection id.
   const executedSql = target?.sql ?? sql.value
-  const r = await useQuery(props.connectionId).execute(executedSql)
-  running.value = false
-  if (r.ok) {
-    queryResult.value = r.data
-    emit('update:result', r.data)
-    emit('executed', {
-      sql: executedSql, ok: true, durationMs: r.data.executionMs, rowCount: r.data.rows.length,
-    })
-  } else {
-    error.value = r.error.message
-    emit('executed', { sql: executedSql, ok: false, durationMs: null, rowCount: null })
+  const runState: ActiveRun = {
+    queryId: createQueryId(),
+    connectionId: props.connectionId,
+    sql: executedSql,
+    startedAt: Date.now(),
+    cancelRequested: false,
   }
+  activeRun = runState
+  running.value = true
+  try {
+    const r = await useQuery(runState.connectionId).execute(runState.sql, runState.queryId)
+    // A future flow may allow a new request immediately after cancellation.
+    // Guard now so a late response can never overwrite the newer result.
+    if (activeRun !== runState) return
+    if (r.ok) {
+      queryResult.value = r.data
+      emit('update:result', r.data)
+      const hasResultSet = r.data.columns.length > 0
+      finish(runState, {
+        status: 'success',
+        startedAt: runState.startedAt,
+        durationMs: r.data.executionMs,
+        rowCount: hasResultSet ? r.data.rowCount ?? r.data.rows.length : null,
+        affectedRows: hasResultSet ? null : r.data.affectedRows ?? null,
+      })
+    } else {
+      const cancelled = runState.cancelRequested && r.error.code === '57014'
+      if (!cancelled) error.value = r.error.message
+      finish(runState, {
+        status: cancelled ? 'cancelled' : 'error',
+        startedAt: runState.startedAt,
+        durationMs: elapsedSince(runState.startedAt),
+        rowCount: null,
+        affectedRows: null,
+      })
+    }
+  } catch (err) {
+    if (activeRun !== runState) return
+    error.value = err instanceof Error ? err.message : String(err)
+    finish(runState, {
+      status: 'error',
+      startedAt: runState.startedAt,
+      durationMs: elapsedSince(runState.startedAt),
+      rowCount: null,
+      affectedRows: null,
+    })
+  }
+}
+
+async function stop() {
+  const runState = activeRun
+  if (!runState || cancelling.value) return
+  runState.cancelRequested = true
+  cancelling.value = true
+  try {
+    const r = await useQuery(runState.connectionId).cancel(runState.queryId)
+    if (activeRun !== runState) return
+    if (!r.ok) {
+      runState.cancelRequested = false
+      cancelling.value = false
+      error.value = `取消失敗：${r.error.message}`
+    }
+    // On success the query request resolves with PG code 57014. Keep the UI in
+    // "cancelling" until that response arrives so another run cannot overlap.
+  } catch (err) {
+    if (activeRun !== runState) return
+    runState.cancelRequested = false
+    cancelling.value = false
+    error.value = `取消失敗：${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+function startTime(at: number): string {
+  return new Date(at).toLocaleTimeString('en-GB', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
 }
 </script>
 
@@ -76,10 +179,23 @@ async function run(target: RunnableSql | null = runnable.value) {
       @run="run($event)"
     />
     <div class="actions">
-      <button class="primary" :disabled="running" title="⌘⏎ / Ctrl+Enter" @click="run()">
-        {{ running ? '執行中…' : runnable?.source === 'selection' ? '執行選取' : '執行' }}
+      <button v-if="!running" class="primary" title="⌘⏎ / Ctrl+Enter" @click="run()">
+        {{ runnable?.source === 'selection' ? '執行選取' : '執行' }}
       </button>
-      <span v-if="queryResult" class="meta">
+      <button v-else class="stop" :disabled="cancelling" aria-label="停止查詢" @click="stop">
+        {{ cancelling ? '取消中…' : '停止' }}
+      </button>
+      <span v-if="lastExecution" class="meta" data-testid="execution-summary">
+        <template v-if="lastExecution.status === 'success'">
+          <template v-if="lastExecution.rowCount !== null">{{ lastExecution.rowCount }} 列</template>
+          <template v-else-if="lastExecution.affectedRows !== null">{{ lastExecution.affectedRows }} 列受影響</template>
+          <template v-else>完成</template>
+        </template>
+        <template v-else-if="lastExecution.status === 'cancelled'">已取消</template>
+        <template v-else>失敗</template>
+        ・{{ startTime(lastExecution.startedAt) }} 開始・{{ Math.round(lastExecution.durationMs) }} ms
+      </span>
+      <span v-else-if="queryResult" class="meta">
         {{ queryResult.rows.length }} 列・{{ Math.round(queryResult.executionMs) }} ms
       </span>
       <ResultExport v-if="queryResult && queryResult.columns.length" :result="queryResult" />
@@ -106,6 +222,8 @@ async function run(target: RunnableSql | null = runnable.value) {
 .editor { display: flex; flex-direction: column; gap: 10px; }
 .actions { display: flex; align-items: center; gap: 12px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.stop { border-color: var(--danger); color: var(--danger); }
+.stop:hover { border-color: var(--danger); background: rgba(224, 108, 94, 0.1); }
 
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table {

@@ -2,6 +2,13 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **SQL 查詢停止控制**：editor 為每次執行產生 query ID，執行中可停止並沿用既有 PostgreSQL cancel 管線；取消期間阻止重疊執行，避免較晚回來的舊 response 覆蓋新結果
+- **執行摘要與三態歷史**：顯示開始時間、執行時間、結果列數或 affected rows；查詢歷史明確區分成功、失敗、使用者取消，並相容遷移 v0.2 的既有 localStorage 紀錄
+
 ## [0.2.0] - 2026-07-17
 
 Query Workbench：讓 LoupeDB 從「能執行 SQL」升級為每天可以持續使用的 SQL 工作區。
