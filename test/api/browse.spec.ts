@@ -27,6 +27,8 @@ describe('browse API', async () => {
     await seedSql.unsafe(`create table notes (label text)`).simple()
     await seedSql.unsafe(`create table contacts (email text not null unique, label text)`).simple()
     await seedSql.unsafe(`insert into contacts values ('a@example.com', 'A')`).simple()
+    await seedSql.unsafe(`create table batch_items (id serial primary key, label text not null)`).simple()
+    await seedSql.unsafe(`insert into batch_items (label) values ('one'), ('two')`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -157,6 +159,71 @@ describe('browse API', async () => {
       },
     )
     expect(deleted.ok).toBe(true)
+  })
+
+  it('POST /changes applies an atomic staged batch and rolls it all back on conflict', async () => {
+    const browseBatch = async () => await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: { schema: 'public', table: 'batch_items', opts: { limit: 10, offset: 0, orderBy: 'id' } },
+    })
+    const initial = await browseBatch()
+    if (!initial.ok) throw new Error('batch browse setup failed')
+    const applied = await $fetch<Envelope<{ affectedRows: number }>>(
+      `/api/connections/${connId}/tables/public/batch_items/changes`,
+      {
+        method: 'POST',
+        body: {
+          changes: [
+            {
+              kind: 'update', column: 'label', value: 'edited', originalValue: 'one',
+              identity: { id: 1 }, version: initial.data.rowVersions![0],
+            },
+            { kind: 'insert', values: { label: 'three' } },
+          ],
+        },
+      },
+    )
+    expect(applied).toMatchObject({ ok: true, data: { affectedRows: 2 } })
+
+    const beforeConflict = await browseBatch()
+    if (!beforeConflict.ok) throw new Error('batch conflict setup failed')
+    await $fetch(`/api/connections/${connId}/tables/public/batch_items/cell`, {
+      method: 'PATCH',
+      body: { column: 'label', value: 'newer', originalValue: 'two', identity: { id: 2 } },
+    })
+    const conflict = await $fetch<Envelope<never>>(
+      `/api/connections/${connId}/tables/public/batch_items/changes`,
+      {
+        method: 'POST',
+        body: {
+          changes: [
+            {
+              kind: 'update', column: 'label', value: 'must rollback', originalValue: 'edited',
+              identity: { id: 1 }, version: beforeConflict.data.rowVersions![0],
+            },
+            { kind: 'delete', identity: { id: 2 }, version: beforeConflict.data.rowVersions![1] },
+          ],
+        },
+      },
+    )
+    expect(conflict.ok).toBe(false)
+    if (!conflict.ok) expect(conflict.error.code).toBe('ROW_CHANGED')
+    const after = await browseBatch()
+    if (!after.ok) throw new Error('batch verification failed')
+    expect(after.data.rows).toEqual([
+      { id: 1, label: 'edited' },
+      { id: 2, label: 'newer' },
+      { id: 3, label: 'three' },
+    ])
+  })
+
+  it('POST /changes validates non-empty staged changes', async () => {
+    const response = await $fetch<Envelope<never>>(
+      `/api/connections/${connId}/tables/public/batch_items/changes`,
+      { method: 'POST', body: { changes: [] } },
+    )
+    expect(response.ok).toBe(false)
+    if (!response.ok) expect(response.error.code).toBe('VALIDATION')
   })
 
   it('DELETE /rows rejects a stale row version', async () => {

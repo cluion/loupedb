@@ -20,6 +20,7 @@ const fakeDriver = (config: ConnectionConfig): DatabaseDriver => ({
   async updateCell() { return { affectedRows: 1, row: {} } },
   async insertRow() { return { affectedRows: 1, row: {} } },
   async deleteRow() { return { affectedRows: 1, row: {} } },
+  async applyTableChanges() { return { affectedRows: 0, results: [] } },
   async cancel() {},
   async* stream() {},
 })

@@ -19,20 +19,16 @@ function result(rows: Array<Record<string, unknown>>): { ok: true; data: QueryRe
   }
 }
 
-const { browseMock, deleteRowMock, describeMock, insertRowMock, updateCellMock } = vi.hoisted(() => ({
+const { applyTableChangesMock, browseMock, describeMock } = vi.hoisted(() => ({
+  applyTableChangesMock: vi.fn(),
   browseMock: vi.fn(async (_s: string, _t: string, _o: BrowseOpts) =>
     ({ ok: true, data: { columns: [], rows: [], executionMs: 0 } })),
   describeMock: vi.fn(),
-  deleteRowMock: vi.fn(),
-  insertRowMock: vi.fn(),
-  updateCellMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   browse: browseMock,
-  deleteRow: deleteRowMock,
-  insertRow: insertRowMock,
-  updateCell: updateCellMock,
+  applyTableChanges: applyTableChangesMock,
   execute: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
 }))
 mockNuxtImport('useSchema', () => () => ({ describe: describeMock }))
@@ -55,18 +51,10 @@ beforeEach(() => {
       primaryKey: ['id'], uniqueKeys: [], foreignKeys: [],
     },
   })
-  updateCellMock.mockReset()
-  updateCellMock.mockResolvedValue({
-    ok: true, data: { affectedRows: 1, row: { id: 1, label: 'edited' } },
-  })
-  insertRowMock.mockReset()
-  insertRowMock.mockResolvedValue({
-    ok: true, data: { affectedRows: 1, row: { id: 2, label: 'new' } },
-  })
-  deleteRowMock.mockReset()
-  deleteRowMock.mockResolvedValue({
-    ok: true, data: { affectedRows: 1, row: { id: 1, label: 'a' } },
-  })
+  applyTableChangesMock.mockReset()
+  applyTableChangesMock.mockImplementation(async (input: { changes: unknown[] }) => ({
+    ok: true, data: { affectedRows: input.changes.length, results: [] },
+  }))
 })
 
 describe('DataGrid', () => {
@@ -137,24 +125,32 @@ describe('DataGrid', () => {
     }))
   })
 
-  it('previews and confirms one parameterized cell update by primary key', async () => {
+  it('stages and atomically applies one parameterized cell update by primary key', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))
 
     await w.findAll('td')[1]!.trigger('dblclick')
     await w.get('[aria-label="編輯 label 第 1 列"]').setValue('edited')
     await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
-    expect(w.get('[role="dialog"]').text()).toContain('最多更新 1 列')
+    expect(w.get('[role="dialog"]').text()).toContain('row version')
     expect(w.get('[role="dialog"] pre').text()).toContain('UPDATE "public"."items"')
     expect(w.get('[role="dialog"] pre').text()).toContain('"id" IS NOT DISTINCT FROM $2')
+    expect(w.get('[role="dialog"] pre').text()).toContain('xmin::text = $4')
 
     browseMock.mockResolvedValue(result([{ id: 1, label: 'edited' }]) as never)
-    await w.findAll('button').find(button => button.text() === '確認寫入 1 列')!.trigger('click')
-    await vi.waitFor(() => expect(updateCellMock).toHaveBeenCalledWith({
-      schema: 'public', table: 'items', column: 'label', value: 'edited',
-      originalValue: 'a', identity: { id: 1 },
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+    expect(applyTableChangesMock).not.toHaveBeenCalled()
+    expect(w.get('[data-testid="staged-changes"]').text()).toContain('待套用變更・1')
+    expect(w.find('td.dirty').text()).toBe('edited')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items',
+      changes: [{
+        kind: 'update', column: 'label', value: 'edited', originalValue: 'a',
+        identity: { id: 1 }, version: '10',
+      }],
     }))
-    await vi.waitFor(() => expect(w.text()).toContain('已更新 1 列'))
+    await vi.waitFor(() => expect(w.text()).toContain('已套用 1 項變更'))
   })
 
   it('uses a non-null unique key to edit and delete rows without a primary key', async () => {
@@ -178,17 +174,23 @@ describe('DataGrid', () => {
     await w.get('[aria-label="編輯 id 第 1 列"]').setValue('2')
     await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
     expect(w.get('[aria-label="確認資料寫入"] pre').text()).toContain('"label" IS NOT DISTINCT FROM $2')
-    await w.findAll('button').find(button => button.text() === '確認寫入 1 列')!.trigger('click')
-    await vi.waitFor(() => expect(updateCellMock).toHaveBeenCalledWith({
-      schema: 'public', table: 'items', column: 'id', value: '2',
-      originalValue: 1, identity: { label: 'a' },
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenLastCalledWith({
+      schema: 'public', table: 'items',
+      changes: [{
+        kind: 'update', column: 'id', value: '2', originalValue: 1,
+        identity: { label: 'a' }, version: '10',
+      }],
     }))
 
     await w.get('[aria-label="刪除第 1 列"]').trigger('click')
     expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('"label" IS NOT DISTINCT FROM $1')
-    await w.findAll('button').find(button => button.text() === '確認刪除 1 列')!.trigger('click')
-    await vi.waitFor(() => expect(deleteRowMock).toHaveBeenCalledWith({
-      schema: 'public', table: 'items', identity: { label: 'a' }, version: '10',
+    await w.findAll('button').find(button => button.text() === '暫存刪除')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenLastCalledWith({
+      schema: 'public', table: 'items',
+      changes: [{ kind: 'delete', identity: { label: 'a' }, version: '10' }],
     }))
   })
 
@@ -220,11 +222,11 @@ describe('DataGrid', () => {
     await vi.waitFor(() => expect(w.get('[data-testid="editability-status"]').text()).toContain('唯讀'))
     await w.findAll('td')[1]!.trigger('dblclick')
     expect(w.find('[aria-label="編輯 label 第 1 列"]').exists()).toBe(false)
-    expect(updateCellMock).not.toHaveBeenCalled()
+    expect(applyTableChangesMock).not.toHaveBeenCalled()
     expect(w.get('[aria-label="刪除第 1 列"]').attributes('disabled')).toBeDefined()
   })
 
-  it('previews and inserts a row while omitting DEFAULT columns', async () => {
+  it('stages and applies an insert while omitting DEFAULT columns', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
     await w.findAll('button').find(button => button.text() === '新增資料列')!.trigger('click')
@@ -233,11 +235,12 @@ describe('DataGrid', () => {
     await w.findAll('button').find(button => button.text() === '預覽新增')!.trigger('click')
     expect(w.get('[aria-label="確認新增資料列"] pre').text()).toContain('INSERT INTO "public"."items" ("label")')
 
-    await w.findAll('button').find(button => button.text() === '確認新增 1 列')!.trigger('click')
-    await vi.waitFor(() => expect(insertRowMock).toHaveBeenCalledWith({
-      schema: 'public', table: 'items', values: { label: 'new row' },
+    await w.findAll('button').find(button => button.text() === '暫存新增')!.trigger('click')
+    expect(w.get('[data-testid="staged-changes"]').text()).toContain('新增資料列')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', changes: [{ kind: 'insert', values: { label: 'new row' } }],
     }))
-    await vi.waitFor(() => expect(w.text()).toContain('已新增 1 列'))
   })
 
   it('uses Clone to prefill non-PK values and keeps a serial PK on DEFAULT', async () => {
@@ -266,16 +269,56 @@ describe('DataGrid', () => {
     expect((w.get('[aria-label="label 的值"]').element as HTMLInputElement).value).toBe('')
   })
 
-  it('previews and deletes one row by PK and row version', async () => {
+  it('stages and applies one delete by PK and row version', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.find('[aria-label="刪除第 1 列"]').exists()).toBe(true))
     await w.get('[aria-label="刪除第 1 列"]').trigger('click')
     expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('"id" IS NOT DISTINCT FROM $1')
     expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('xmin::text = $2')
-    await w.findAll('button').find(button => button.text() === '確認刪除 1 列')!.trigger('click')
-    await vi.waitFor(() => expect(deleteRowMock).toHaveBeenCalledWith({
-      schema: 'public', table: 'items', identity: { id: 1 }, version: '10',
+    await w.findAll('button').find(button => button.text() === '暫存刪除')!.trigger('click')
+    expect(w.find('tr.pending-delete').exists()).toBe(true)
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items',
+      changes: [{ kind: 'delete', identity: { id: 1 }, version: '10' }],
     }))
-    await vi.waitFor(() => expect(w.text()).toContain('已刪除 1 列'))
+  })
+
+  it('keeps multiple changes local and restores the loaded page with 全部回復', async () => {
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))
+    await w.findAll('td')[1]!.trigger('dblclick')
+    await w.get('[aria-label="編輯 label 第 1 列"]').setValue('dirty')
+    await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+
+    await w.findAll('button').find(button => button.text() === '新增資料列')!.trigger('click')
+    await w.get('[aria-label="label 的值"]').setValue('pending insert')
+    await w.findAll('button').find(button => button.text() === '預覽新增')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '暫存新增')!.trigger('click')
+
+    expect(w.get('[data-testid="staged-changes"]').text()).toContain('待套用變更・2')
+    expect(w.find('select[aria-label="filter column"]').attributes('disabled')).toBeDefined()
+    expect(w.find('td.dirty').text()).toBe('dirty')
+    await w.findAll('button').find(button => button.text() === '全部回復')!.trigger('click')
+    expect(w.find('[data-testid="staged-changes"]').exists()).toBe(false)
+    expect(w.find('td.dirty').exists()).toBe(false)
+    expect(w.findAll('td')[1]!.text()).toBe('a')
+    expect(applyTableChangesMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps every staged change when the atomic apply is rejected', async () => {
+    applyTableChangesMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'ROW_CHANGED', message: 'row changed', severity: 'error', retryable: false },
+    })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.get('[aria-label="刪除第 1 列"]').exists()).toBe(true))
+    await w.get('[aria-label="刪除第 1 列"]').trigger('click')
+    await w.findAll('button').find(button => button.text() === '暫存刪除')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(w.get('[role="alert"]').text()).toContain('整批未套用：row changed'))
+    expect(w.get('[data-testid="staged-changes"]').text()).toContain('待套用變更・1')
+    expect(w.find('tr.pending-delete').exists()).toBe(true)
   })
 })

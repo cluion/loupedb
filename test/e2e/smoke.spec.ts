@@ -45,7 +45,7 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // data grid renders the table content end to end
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
 
-  // a scalar non-PK cell previews parameterized SQL and updates exactly one row
+  // edits stay local with a dirty marker until the atomic batch is applied
   await expect(page.getByTestId('editability-status')).toContainText('可編輯')
   await page.getByRole('cell', { name: 'x', exact: true }).dblclick()
   await page.getByRole('textbox', { name: '編輯 label 第 1 列' }).fill('inline edited')
@@ -53,30 +53,48 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   const writePreview = page.getByRole('dialog', { name: '確認資料寫入' })
   await expect(writePreview).toContainText('UPDATE "public"."items"')
   await expect(writePreview).toContainText('"id" IS NOT DISTINCT FROM $2')
-  await page.getByRole('button', { name: '確認寫入 1 列' }).click()
-  await expect(page.getByRole('status')).toContainText('已更新 1 列')
+  await expect(writePreview).toContainText('xmin::text')
+  await page.getByRole('button', { name: '暫存更新' }).click()
+  await expect(page.getByTestId('staged-changes')).toContainText('待套用變更・1')
   await expect(page.getByRole('cell', { name: 'inline edited', exact: true })).toBeVisible()
 
-  // insert, Clone and delete reuse parameterized previews; delete also checks xmin
+  // inserts join the same staged batch; one transaction applies both changes
   await page.getByRole('button', { name: '新增資料列' }).click()
   await page.getByRole('textbox', { name: 'label 的值' }).fill('added row')
   await page.getByRole('button', { name: '預覽新增' }).click()
   const insertPreview = page.getByRole('dialog', { name: '確認新增資料列' })
   await expect(insertPreview).toContainText('INSERT INTO "public"."items" ("label")')
-  await page.getByRole('button', { name: '確認新增 1 列' }).click()
+  await page.getByRole('button', { name: '暫存新增' }).click()
+  await expect(page.getByTestId('staged-changes')).toContainText('待套用變更・2')
+  await page.getByRole('button', { name: '全部套用 2 項' }).click()
+  await expect(page.getByRole('status')).toContainText('已套用 2 項變更')
+  await expect(page.getByRole('cell', { name: 'inline edited', exact: true })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'added row', exact: true })).toBeVisible()
 
   const dataGrid = page.locator('.grid').first()
   await dataGrid.getByRole('row').filter({ hasText: 'added row' }).getByRole('button', { name: /Clone/ }).click()
   await page.getByRole('textbox', { name: 'label 的值' }).fill('cloned row')
   await page.getByRole('button', { name: '預覽新增' }).click()
-  await page.getByRole('button', { name: '確認新增 1 列' }).click()
+  await page.getByRole('button', { name: '暫存新增' }).click()
+  await page.getByRole('button', { name: '全部套用 1 項' }).click()
   await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).toBeVisible()
 
   await dataGrid.getByRole('row').filter({ hasText: 'cloned row' }).getByRole('button', { name: /刪除/ }).click()
   const deletePreview = page.getByRole('dialog', { name: '確認刪除資料列' })
   await expect(deletePreview).toContainText('xmin::text')
-  await page.getByRole('button', { name: '確認刪除 1 列' }).click()
+  await page.getByRole('button', { name: '暫存刪除' }).click()
+  await expect(dataGrid.getByRole('row').filter({ hasText: 'cloned row' })).toContainText('待刪除')
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('尚有未套用的資料變更')
+    await dialog.dismiss()
+  })
+  await page.getByRole('button', { name: '結構' }).click()
+  await expect(page.getByTestId('staged-changes')).toBeVisible()
+  await page.getByRole('button', { name: '全部回復' }).click()
+  await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).toBeVisible()
+  await dataGrid.getByRole('row').filter({ hasText: 'cloned row' }).getByRole('button', { name: /刪除/ }).click()
+  await page.getByRole('button', { name: '暫存刪除' }).click()
+  await page.getByRole('button', { name: '全部套用 1 項' }).click()
   await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).not.toBeVisible()
 
   // without a primary key, a complete non-NULL unique key still provides safe row identity
@@ -88,14 +106,16 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await expect(page.getByRole('dialog', { name: '確認資料寫入' })).toContainText(
     '"email" IS NOT DISTINCT FROM $2',
   )
-  await page.getByRole('button', { name: '確認寫入 1 列' }).click()
+  await page.getByRole('button', { name: '暫存更新' }).click()
+  await page.getByRole('button', { name: '全部套用 1 項' }).click()
   await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).toBeVisible()
   const contactsGrid = page.locator('.grid').first()
   await contactsGrid.getByRole('row').filter({ hasText: 'unique edited' }).getByRole('button', { name: /刪除/ }).click()
   await expect(page.getByRole('dialog', { name: '確認刪除資料列' })).toContainText(
     '"email" IS NOT DISTINCT FROM $1',
   )
-  await page.getByRole('button', { name: '確認刪除 1 列' }).click()
+  await page.getByRole('button', { name: '暫存刪除' }).click()
+  await page.getByRole('button', { name: '全部套用 1 項' }).click()
   await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).not.toBeVisible()
 
   await page.getByRole('button', { name: 'items', exact: true }).click()

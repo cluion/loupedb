@@ -118,6 +118,56 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('applies staged updates, inserts and deletes in one transaction', async () => {
+    const driver = await setup()
+    const browsed = await driver.browse('public', 'items', { limit: 3, offset: 0, orderBy: 'id' })
+    const version = (id: number) => browsed.rowVersions![browsed.rows.findIndex((row) => row.id === id)]!
+    const result = await driver.applyTableChanges({
+      schema: 'public',
+      table: 'items',
+      changes: [
+        {
+          kind: 'update', column: 'label', value: 'edited', originalValue: 'a',
+          identity: { id: 1 }, version: version(1),
+        },
+        {
+          kind: 'update', column: 'qty', value: 10, originalValue: 1,
+          identity: { id: 1 }, version: version(1),
+        },
+        { kind: 'insert', values: { label: 'inserted', qty: 4 } },
+        { kind: 'delete', identity: { id: 2 }, version: version(2) },
+      ],
+    })
+    expect(result.affectedRows).toBe(4)
+    const after = await driver.execute('select label, qty from items order by id')
+    expect(after.rows).toEqual([
+      { label: 'edited', qty: 10 },
+      { label: 'c', qty: 3 },
+      { label: 'inserted', qty: 4 },
+    ])
+    await driver.disconnect()
+  })
+
+  it('rolls back every staged change when one row version is stale', async () => {
+    const driver = await setup()
+    const browsed = await driver.browse('public', 'items', { limit: 3, offset: 0, orderBy: 'id' })
+    await driver.execute("update items set label = 'newer' where id = 2")
+    await expect(driver.applyTableChanges({
+      schema: 'public',
+      table: 'items',
+      changes: [
+        {
+          kind: 'update', column: 'label', value: 'should rollback', originalValue: 'a',
+          identity: { id: 1 }, version: browsed.rowVersions![0]!,
+        },
+        { kind: 'delete', identity: { id: 2 }, version: browsed.rowVersions![1]! },
+      ],
+    })).rejects.toMatchObject({ code: 'ROW_CHANGED' })
+    const after = await driver.execute('select id, label from items where id in (1, 2) order by id')
+    expect(after.rows).toEqual([{ id: 1, label: 'a' }, { id: 2, label: 'newer' }])
+    await driver.disconnect()
+  })
+
   it('inserts DEFAULT VALUES when every field is omitted', async () => {
     const driver = await setup()
     await driver.execute("create table defaults_only (id serial primary key, label text not null default 'ready')")
@@ -172,6 +222,13 @@ describe('postgres driver execute/browse', () => {
     })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
     await expect(driver.deleteRow({
       schema: 'public', table: 'items', identity: { id: 1 }, version: '1',
+    })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
+    await expect(driver.applyTableChanges({
+      schema: 'public', table: 'items',
+      changes: [{
+        kind: 'update', column: 'label', value: 'blocked', originalValue: 'a',
+        identity: { id: 1 }, version: '1',
+      }],
     })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
     await driver.rollbackTransaction()
     await driver.disconnect()

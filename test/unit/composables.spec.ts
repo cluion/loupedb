@@ -126,6 +126,17 @@ describe('useQuery', () => {
     })
   })
 
+  it('applyTableChanges posts the atomic batch to the encoded table route', async () => {
+    const changes = [{
+      kind: 'update' as const,
+      column: 'label', value: 'new', originalValue: 'old', identity: { id: 7 }, version: '42',
+    }]
+    await useQuery('c1').applyTableChanges({ schema: 'public', table: 'daily items', changes })
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables/public/daily%20items/changes', {
+      method: 'POST', body: { changes },
+    })
+  })
+
   it('cancel posts queryId', async () => {
     await useQuery('c1').cancel('q9')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/cancel', {

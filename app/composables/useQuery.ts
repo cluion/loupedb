@@ -1,4 +1,4 @@
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, Envelope, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, ScriptExecutionResult, TransactionState } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, CellUpdateResult, Envelope, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, ScriptExecutionResult, TableChangesInput, TableChangesResult, TransactionState } from '#shared/types'
 
 export function useQuery(connId: string) {
   return {
@@ -51,6 +51,14 @@ export function useQuery(connId: string) {
       return await $fetch<Envelope<RowMutationResult>>(`/api/connections/${connId}/tables/${schema}/${table}/rows`, {
         method: 'DELETE', body: { identity: input.identity, version: input.version },
       })
+    },
+    async applyTableChanges(input: TableChangesInput) {
+      const schema = encodeURIComponent(input.schema)
+      const table = encodeURIComponent(input.table)
+      return await $fetch<Envelope<TableChangesResult>>(
+        `/api/connections/${connId}/tables/${schema}/${table}/changes`,
+        { method: 'POST', body: { changes: input.changes } },
+      )
     },
     async cancel(queryId: string) {
       return await $fetch<Envelope<void>>(`/api/connections/${connId}/cancel`, {

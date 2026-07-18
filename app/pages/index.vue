@@ -7,6 +7,7 @@ const locked = ref(false)
 // connId is the sibling session bound to the selected database
 const selected = ref<{ connId: string; database: string; schema: string; table: string } | null>(null)
 const view = ref<'data' | 'structure'>('data')
+const hasStagedChanges = ref(false)
 // sql runs against the database the user is currently looking at
 const activeConnId = computed(() => selected.value?.connId ?? currentConnectionId.value!)
 
@@ -36,12 +37,41 @@ onNuxtReady(async () => {
 })
 
 async function disconnect() {
+  if (!confirmDiscardStagedChanges()) return
   const id = currentConnectionId.value
   if (id) await remove(id) // server cascades sibling sessions
   if (id) clearSqlWorkspacePersistence(id)
   setCurrentConnection(null)
   selected.value = null
 }
+
+function confirmDiscardStagedChanges(): boolean {
+  return !hasStagedChanges.value || window.confirm('尚有未套用的資料變更，確定要全部捨棄嗎？')
+}
+
+function selectTable(connId: string, database: string, schema: string, table: string) {
+  const current = selected.value
+  const changed = !current
+    || current.connId !== connId || current.schema !== schema || current.table !== table
+  if (changed && !confirmDiscardStagedChanges()) return
+  hasStagedChanges.value = false
+  selected.value = { connId, database, schema, table }
+}
+
+function selectView(next: 'data' | 'structure') {
+  if (view.value === 'data' && next !== 'data' && !confirmDiscardStagedChanges()) return
+  hasStagedChanges.value = false
+  view.value = next
+}
+
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (!hasStagedChanges.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 </script>
 
 <template>
@@ -63,7 +93,7 @@ async function disconnect() {
       <p class="eyebrow">Schema</p>
       <SchemaTree
         :connection-id="currentConnectionId"
-        @select-table="(cid, db, s, t) => selected = { connId: cid, database: db, schema: s, table: t }"
+        @select-table="selectTable"
       />
     </aside>
     <main class="main">
@@ -71,14 +101,15 @@ async function disconnect() {
         <div class="panel-head">
           <p class="eyebrow">{{ selected.database }} / {{ selected.schema }}.{{ selected.table }}</p>
           <div class="tabs">
-            <button class="ghost" :class="{ active: view === 'data' }" @click="view = 'data'">資料</button>
-            <button class="ghost" :class="{ active: view === 'structure' }" @click="view = 'structure'">結構</button>
+            <button class="ghost" :class="{ active: view === 'data' }" @click="selectView('data')">資料</button>
+            <button class="ghost" :class="{ active: view === 'structure' }" @click="selectView('structure')">結構</button>
           </div>
         </div>
         <template v-if="view === 'data'">
           <DataGrid
             :key="`${selected.connId}.${selected.schema}.${selected.table}`"
             :connection-id="selected.connId" :schema="selected.schema" :table="selected.table"
+            @dirty-state="hasStagedChanges = $event"
           />
           <StreamResult :connection-id="selected.connId" :schema="selected.schema" :table="selected.table" />
         </template>

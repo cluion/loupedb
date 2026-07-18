@@ -239,9 +239,15 @@ export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise
   const rowConditions = identityConditions(input.identity, key, params)
   params.push(input.originalValue)
   const originalCondition = `${quoteIdent(input.column)} is not distinct from $${params.length}`
+  rowConditions.push(originalCondition)
+  if (input.version !== undefined) {
+    if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
+    params.push(input.version)
+    rowConditions.push(`xmin::text = $${params.length}`)
+  }
   const text = `update ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
     + ` set ${quoteIdent(input.column)} = $1`
-    + ` where ${[...rowConditions, originalCondition].join(' and ')}`
+    + ` where ${rowConditions.join(' and ')}`
     + ' returning *'
   const rows = await sql.unsafe(text, params as never[])
   if (rows.length !== 1) {

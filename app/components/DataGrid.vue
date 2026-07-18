@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { BrowseOpts, CellUpdateInput, ColumnInfo, NormalizedType, QueryResult, RowDeleteInput, RowInsertInput, TableSchema } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, ColumnInfo, NormalizedType, QueryResult, RowDeleteInput, RowInsertInput, TableChange, TableSchema } from '#shared/types'
 
 const props = defineProps<{ connectionId: string; schema: string; table: string }>()
-const { browse, deleteRow, insertRow, updateCell } = useQuery(props.connectionId)
+const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
+const { applyTableChanges, browse } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
 
 const INLINE_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
@@ -31,12 +32,14 @@ interface CellEditorState {
   readonly column: string
   readonly originalValue: unknown
   readonly identity: Readonly<Record<string, unknown>>
+  readonly version: string
   value: string
   useNull: boolean
 }
 
 interface PendingCellUpdate extends CellUpdateInput {
   readonly rowIndex: number
+  readonly version: string
   readonly sql: string
   readonly params: ReadonlyArray<unknown>
 }
@@ -64,14 +67,48 @@ interface PendingRowDelete extends RowDeleteInput {
   readonly params: ReadonlyArray<unknown>
 }
 
+interface StagedCellUpdate extends PendingCellUpdate { readonly order: number }
+interface StagedRowInsert extends PendingRowInsert { readonly id: number; readonly order: number }
+interface StagedRowDelete extends PendingRowDelete { readonly order: number }
+
 const editor = ref<CellEditorState | null>(null)
 const pendingUpdate = ref<PendingCellUpdate | null>(null)
 const insertDraft = ref<InsertDraft | null>(null)
 const pendingInsert = ref<PendingRowInsert | null>(null)
 const pendingDelete = ref<PendingRowDelete | null>(null)
+const stagedUpdates = ref<StagedCellUpdate[]>([])
+const stagedInserts = ref<StagedRowInsert[]>([])
+const stagedDeletes = ref<StagedRowDelete[]>([])
+let nextStagedInsertId = 1
+let nextStagedChangeOrder = 1
 
 // no total count in mvp (spec section 6): a short page means the last page
 const isLastPage = computed(() => (result.value?.rows.length ?? 0) < limit.value)
+const stagedCount = computed(() => (
+  stagedUpdates.value.length + stagedInserts.value.length + stagedDeletes.value.length
+))
+const stagedChanges = computed<ReadonlyArray<TableChange>>(() => [
+  ...stagedUpdates.value.map((change) => ({
+    order: change.order,
+    change: {
+      kind: 'update' as const,
+      column: change.column,
+      value: change.value,
+      originalValue: change.originalValue,
+      identity: change.identity,
+      version: change.version,
+    },
+  })),
+  ...stagedInserts.value.map((change) => ({
+    order: change.order, change: { kind: 'insert' as const, values: change.values },
+  })),
+  ...stagedDeletes.value.map((change) => ({
+    order: change.order,
+    change: { kind: 'delete' as const, identity: change.identity, version: change.version },
+  })),
+].sort((left, right) => left.order - right.order).map(({ change }) => change))
+watch(stagedCount, (count) => emit('dirty-state', count > 0), { immediate: true })
+onUnmounted(() => emit('dirty-state', false))
 
 async function load() {
   error.value = null
@@ -113,28 +150,35 @@ watch(() => [props.schema, props.table], () => {
   insertDraft.value = null
   pendingInsert.value = null
   pendingDelete.value = null
+  stagedUpdates.value = []
+  stagedInserts.value = []
+  stagedDeletes.value = []
   notice.value = null
   load()
   loadTableInfo()
 }, { immediate: true })
 
 function sort(col: string) {
+  if (stagedCount.value) return
   if (orderBy.value === col) orderDir.value = orderDir.value === 'asc' ? 'desc' : 'asc'
   else { orderBy.value = col; orderDir.value = 'asc' }
   load()
 }
 
 function applyFilter() {
+  if (stagedCount.value) return
   offset.value = 0
   load()
 }
 
 function prevPage() {
+  if (stagedCount.value) return
   offset.value = Math.max(0, offset.value - limit.value)
   load()
 }
 
 function nextPage() {
+  if (stagedCount.value) return
   offset.value = offset.value + limit.value
   load()
 }
@@ -176,10 +220,44 @@ function identityFor(row: Readonly<Record<string, unknown>>): SafeRowIdentity | 
   return null
 }
 
-function canEditCell(column: ColumnInfo, row: Readonly<Record<string, unknown>>): boolean {
+function identitySignature(identity: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(Object.keys(identity).sort().map((key) => [key, identity[key]]))
+}
+
+function rowSignature(row: Readonly<Record<string, unknown>>): string | null {
+  const identity = identityFor(row)
+  return identity ? identitySignature(identity.values) : null
+}
+
+function stagedUpdateFor(
+  row: Readonly<Record<string, unknown>>, column: string,
+): PendingCellUpdate | undefined {
+  const signature = rowSignature(row)
+  return signature === null ? undefined : stagedUpdates.value.find((change) => (
+    identitySignature(change.identity) === signature && change.column === column
+  ))
+}
+
+function isStagedDelete(row: Readonly<Record<string, unknown>>): boolean {
+  const signature = rowSignature(row)
+  return signature !== null && stagedDeletes.value.some((change) => (
+    identitySignature(change.identity) === signature
+  ))
+}
+
+function rowVersion(rowIndex: number): string | null {
+  const version = result.value?.rowVersions?.[rowIndex]
+  return typeof version === 'string' && /^\d+$/u.test(version) ? version : null
+}
+
+function canEditCell(
+  column: ColumnInfo, row: Readonly<Record<string, unknown>>, rowIndex: number,
+): boolean {
   const identity = identityFor(row)
   const schemaColumn = tableInfo.value?.columns.find((candidate) => candidate.name === column.name)
   return identity !== null
+    && rowVersion(rowIndex) !== null
+    && !isStagedDelete(row)
     && !identity.columns.includes(column.name)
     && schemaColumn?.editable !== false
     && INLINE_EDIT_TYPES.has(column.type)
@@ -191,19 +269,28 @@ function displayValue(value: unknown): string {
   return String(value)
 }
 
+function cellValue(row: Readonly<Record<string, unknown>>, column: string): unknown {
+  const staged = stagedUpdateFor(row, column)
+  return staged ? staged.value : row[column]
+}
+
 function beginEdit(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
-  if (!canEditCell(column, row) || saving.value) return
+  if (!canEditCell(column, row, rowIndex) || saving.value) return
   const identity = identityFor(row)
-  if (!identity) return
+  const version = rowVersion(rowIndex)
+  if (!identity || !version) return
   closeWritePanels()
-  const originalValue = row[column.name]
+  const staged = stagedUpdateFor(row, column.name)
+  const originalValue = staged ? staged.originalValue : row[column.name]
+  const value = staged ? staged.value : row[column.name]
   editor.value = {
     rowIndex,
     column: column.name,
     originalValue,
     identity: identity.values,
-    value: originalValue === null ? '' : displayValue(originalValue),
-    useNull: originalValue === null,
+    version,
+    value: value === null ? '' : displayValue(value),
+    useNull: value === null,
   }
   notice.value = null
 }
@@ -224,6 +311,8 @@ function prepareUpdate() {
   const conditions = identityEntries.map(([column], index) =>
     `${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${index + 2}`)
   conditions.push(`${quotePreviewIdentifier(editor.value.column)} IS NOT DISTINCT FROM $${params.length}`)
+  params.push(editor.value.version)
+  conditions.push(`xmin::text = $${params.length}`)
   const sql = `UPDATE ${quotePreviewIdentifier(props.schema)}.${quotePreviewIdentifier(props.table)}\n`
     + `SET ${quotePreviewIdentifier(editor.value.column)} = $1\n`
     + `WHERE ${conditions.join('\n  AND ')};`
@@ -234,6 +323,7 @@ function prepareUpdate() {
     value,
     originalValue: editor.value.originalValue,
     identity: editor.value.identity,
+    version: editor.value.version,
     rowIndex: editor.value.rowIndex,
     sql,
     params,
@@ -245,32 +335,21 @@ function parameterLabel(value: unknown): string {
   return typeof value === 'string' ? JSON.stringify(value) : String(value)
 }
 
-async function confirmUpdate() {
+function stageUpdate() {
   if (!pendingUpdate.value || saving.value) return
-  saving.value = true
-  writeError.value = null
   const input = pendingUpdate.value
-  try {
-    const response = await updateCell({
-      schema: input.schema,
-      table: input.table,
-      column: input.column,
-      value: input.value,
-      originalValue: input.originalValue,
-      identity: input.identity,
-    })
-    if (!response.ok) {
-      writeError.value = response.error.message
-      return
-    }
-    closeWritePanels()
-    notice.value = '已更新 1 列'
-    await load()
-  } catch (cause) {
-    writeError.value = cause instanceof Error ? cause.message : String(cause)
-  } finally {
-    saving.value = false
+  const signature = identitySignature(input.identity)
+  const previous = stagedUpdates.value.find((change) => (
+    identitySignature(change.identity) === signature && change.column === input.column
+  ))
+  stagedUpdates.value = stagedUpdates.value.filter((change) => !(
+    identitySignature(change.identity) === signature && change.column === input.column
+  ))
+  if (!Object.is(input.value, input.originalValue)) {
+    stagedUpdates.value.push({ ...input, order: previous?.order ?? nextStagedChangeOrder++ })
   }
+  closeWritePanels()
+  notice.value = Object.is(input.value, input.originalValue) ? '已移除此欄位變更' : '已暫存 1 個欄位變更'
 }
 
 function startInsert(source?: Readonly<Record<string, unknown>>) {
@@ -298,7 +377,7 @@ function startInsert(source?: Readonly<Record<string, unknown>>) {
           value: '',
         }
       }
-      const sourceValue = source[column.name]
+      const sourceValue = cellValue(source, column.name)
       return {
         column,
         mode: sourceValue === null ? 'null' : 'value',
@@ -331,34 +410,19 @@ function prepareInsert() {
   }
 }
 
-async function confirmInsert() {
+function stageInsert() {
   if (!pendingInsert.value || saving.value) return
-  saving.value = true
-  writeError.value = null
-  const input = pendingInsert.value
-  try {
-    const response = await insertRow({
-      schema: input.schema, table: input.table, values: input.values,
-    })
-    if (!response.ok) {
-      writeError.value = response.error.message
-      return
-    }
-    closeWritePanels()
-    notice.value = '已新增 1 列'
-    await load()
-  } catch (cause) {
-    writeError.value = cause instanceof Error ? cause.message : String(cause)
-  } finally {
-    saving.value = false
-  }
+  stagedInserts.value.push({
+    ...pendingInsert.value, id: nextStagedInsertId++, order: nextStagedChangeOrder++,
+  })
+  closeWritePanels()
+  notice.value = '已暫存新增 1 列'
 }
 
 function canDeleteRow(row: Readonly<Record<string, unknown>>, rowIndex: number): boolean {
-  const version = result.value?.rowVersions?.[rowIndex]
   return identityFor(row) !== null
-    && typeof version === 'string'
-    && /^\d+$/u.test(version)
+    && rowVersion(rowIndex) !== null
+    && !isStagedDelete(row)
 }
 
 function prepareDelete(row: Readonly<Record<string, unknown>>, rowIndex: number) {
@@ -369,7 +433,7 @@ function prepareDelete(row: Readonly<Record<string, unknown>>, rowIndex: number)
   notice.value = null
   const identity = safeIdentity.values
   const identityEntries = Object.entries(identity)
-  const version = result.value!.rowVersions![rowIndex]!
+  const version = rowVersion(rowIndex)!
   const params = [...identityEntries.map(([, value]) => value), version]
   const conditions = identityEntries.map(([column], index) =>
     `${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${index + 1}`)
@@ -385,24 +449,55 @@ function prepareDelete(row: Readonly<Record<string, unknown>>, rowIndex: number)
   }
 }
 
-async function confirmDelete() {
+function stageDelete() {
   if (!pendingDelete.value || saving.value) return
+  const input = pendingDelete.value
+  const signature = identitySignature(input.identity)
+  stagedUpdates.value = stagedUpdates.value.filter((change) => (
+    identitySignature(change.identity) !== signature
+  ))
+  stagedDeletes.value = [
+    ...stagedDeletes.value.filter((change) => identitySignature(change.identity) !== signature),
+    { ...input, order: nextStagedChangeOrder++ },
+  ]
+  closeWritePanels()
+  notice.value = '已暫存刪除 1 列'
+}
+
+function identityLabel(identity: Readonly<Record<string, unknown>>): string {
+  return Object.entries(identity).map(([key, value]) => `${key}=${parameterLabel(value)}`).join(', ')
+}
+
+function revertAll() {
+  if (saving.value) return
+  const count = stagedCount.value
+  stagedUpdates.value = []
+  stagedInserts.value = []
+  stagedDeletes.value = []
+  closeWritePanels()
+  notice.value = `已回復 ${count} 項未套用變更`
+}
+
+async function applyAll() {
+  if (!stagedCount.value || saving.value) return
   saving.value = true
   writeError.value = null
-  const input = pendingDelete.value
   try {
-    const response = await deleteRow({
-      schema: input.schema, table: input.table, identity: input.identity, version: input.version,
+    const response = await applyTableChanges({
+      schema: props.schema, table: props.table, changes: stagedChanges.value,
     })
     if (!response.ok) {
-      writeError.value = response.error.message
+      writeError.value = `整批未套用：${response.error.message}`
       return
     }
+    stagedUpdates.value = []
+    stagedInserts.value = []
+    stagedDeletes.value = []
     closeWritePanels()
-    notice.value = '已刪除 1 列'
+    notice.value = `已套用 ${response.data.affectedRows} 項變更`
     await load()
   } catch (cause) {
-    writeError.value = cause instanceof Error ? cause.message : String(cause)
+    writeError.value = `整批未套用：${cause instanceof Error ? cause.message : String(cause)}`
   } finally {
     saving.value = false
   }
@@ -421,19 +516,19 @@ async function confirmDelete() {
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="writeError" class="write-error" role="alert">{{ writeError }}</p>
     <form class="toolbar" @submit.prevent="applyFilter">
-      <select v-model="filterColumn" aria-label="filter column">
+      <select v-model="filterColumn" aria-label="filter column" :disabled="stagedCount > 0">
         <option value="">(不篩選)</option>
         <option v-for="c in result?.columns ?? []" :key="c.name" :value="c.name">{{ c.name }}</option>
       </select>
-      <select v-model="filterOp" aria-label="filter op">
+      <select v-model="filterOp" aria-label="filter op" :disabled="stagedCount > 0">
         <option>=</option>
         <option>!=</option>
         <option>&gt;</option>
         <option>&lt;</option>
         <option>like</option>
       </select>
-      <input v-model="filterValue" placeholder="值">
-      <button type="submit">套用</button>
+      <input v-model="filterValue" placeholder="值" :disabled="stagedCount > 0">
+      <button type="submit" :disabled="stagedCount > 0">套用</button>
       <button type="button" :disabled="!tableInfo || saving" @click="startInsert()">新增資料列</button>
     </form>
     <div v-if="loading && !result" class="loading">載入中…</div>
@@ -443,7 +538,8 @@ async function confirmDelete() {
           <tr>
             <th
               v-for="c in result.columns" :key="c.name"
-              :class="{ sorted: orderBy === c.name }"
+              :class="{ sorted: orderBy === c.name, locked: stagedCount > 0 }"
+              :title="stagedCount > 0 ? '請先套用或回復待處理變更' : undefined"
               @click="sort(c.name)"
             >
               {{ c.name }}<span v-if="orderBy === c.name" class="dir">{{ orderDir === 'asc' ? ' ↑' : ' ↓' }}</span>
@@ -452,17 +548,18 @@ async function confirmDelete() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(row, i) in result.rows" :key="i">
+          <tr v-for="(row, i) in result.rows" :key="i" :class="{ 'pending-delete': isStagedDelete(row) }">
             <td
               v-for="c in result.columns"
               :key="c.name"
               :class="{
-                isnull: row[c.name] === null,
-                editable: canEditCell(c, row),
+                isnull: cellValue(row, c.name) === null,
+                editable: canEditCell(c, row, i),
                 editing: editor?.rowIndex === i && editor.column === c.name,
+                dirty: Boolean(stagedUpdateFor(row, c.name)),
               }"
-              :tabindex="canEditCell(c, row) ? 0 : undefined"
-              :title="canEditCell(c, row) ? '雙擊或按 Enter 編輯' : undefined"
+              :tabindex="canEditCell(c, row, i) ? 0 : undefined"
+              :title="canEditCell(c, row, i) ? '雙擊或按 Enter 編輯' : undefined"
               @dblclick="beginEdit(row, i, c)"
               @keydown.enter.prevent="beginEdit(row, i, c)"
             >
@@ -485,10 +582,13 @@ async function confirmDelete() {
                 <button type="button" :disabled="Boolean(pendingUpdate)" @click="prepareUpdate">預覽寫入</button>
                 <button type="button" class="ghost" @click="cancelEdit">取消</button>
               </div>
-              <template v-else>{{ displayValue(row[c.name]) }}</template>
+              <template v-else>{{ displayValue(cellValue(row, c.name)) }}</template>
             </td>
             <td class="row-actions">
-              <button type="button" class="ghost" :aria-label="`Clone 第 ${offset + i + 1} 列`" @click="startInsert(row)">
+              <button
+                type="button" class="ghost" :aria-label="`Clone 第 ${offset + i + 1} 列`"
+                :disabled="isStagedDelete(row)" @click="startInsert(row)"
+              >
                 Clone
               </button>
               <button
@@ -498,6 +598,7 @@ async function confirmDelete() {
                 :disabled="!canDeleteRow(row, i)"
                 @click="prepareDelete(row, i)"
               >刪除</button>
+              <span v-if="isStagedDelete(row)" class="dirty-badge">待刪除</span>
             </td>
           </tr>
         </tbody>
@@ -546,14 +647,14 @@ async function confirmDelete() {
       </ol>
       <div class="preview-actions">
         <button type="button" class="ghost" :disabled="saving" @click="pendingInsert = null">返回修改</button>
-        <button type="button" class="write-confirm" :disabled="saving" @click="confirmInsert">
-          {{ saving ? '新增中…' : '確認新增 1 列' }}
+        <button type="button" class="write-confirm" :disabled="saving" @click="stageInsert">
+          暫存新增
         </button>
       </div>
     </section>
     <section v-if="pendingUpdate" class="write-preview" role="dialog" aria-label="確認資料寫入">
       <strong>確認寫入</strong>
-      <p>使用參數化 SQL，最多更新 1 列；若原值已改變，伺服器會拒絕寫入。</p>
+      <p>使用參數化 SQL、原值與 row version；先加入待套用清單，不會立即寫入。</p>
       <pre>{{ pendingUpdate.sql }}</pre>
       <ol>
         <li v-for="(param, index) in pendingUpdate.params" :key="index">
@@ -562,8 +663,8 @@ async function confirmDelete() {
       </ol>
       <div class="preview-actions">
         <button type="button" class="ghost" :disabled="saving" @click="pendingUpdate = null">返回修改</button>
-        <button type="button" class="write-confirm" :disabled="saving" @click="confirmUpdate">
-          {{ saving ? '寫入中…' : '確認寫入 1 列' }}
+        <button type="button" class="write-confirm" :disabled="saving" @click="stageUpdate">
+          暫存更新
         </button>
       </div>
     </section>
@@ -578,14 +679,55 @@ async function confirmDelete() {
       </ol>
       <div class="preview-actions">
         <button type="button" class="ghost" :disabled="saving" @click="closeWritePanels">取消</button>
-        <button type="button" class="delete-confirm" :disabled="saving" @click="confirmDelete">
-          {{ saving ? '刪除中…' : '確認刪除 1 列' }}
+        <button type="button" class="delete-confirm" :disabled="saving" @click="stageDelete">
+          暫存刪除
+        </button>
+      </div>
+    </section>
+    <section v-if="stagedCount" class="staged-changes" data-testid="staged-changes">
+      <div class="staged-head">
+        <div>
+          <strong>待套用變更・{{ stagedCount }}</strong>
+          <p>尚未寫入資料庫；全部套用會使用單一 transaction，任一衝突會整批 rollback。</p>
+        </div>
+        <span class="dirty-badge">DIRTY</span>
+      </div>
+      <ol class="staged-list">
+        <li
+          v-for="change in stagedUpdates"
+          :key="`update:${identitySignature(change.identity)}:${change.column}`"
+        >
+          <strong>更新 {{ identityLabel(change.identity) }}・{{ change.column }}</strong>
+          <pre>{{ change.sql }}</pre>
+          <small v-for="(param, index) in change.params" :key="index">
+            <code>${{ index + 1 }}</code> = <code>{{ parameterLabel(param) }}</code>
+          </small>
+        </li>
+        <li v-for="change in stagedInserts" :key="`insert:${change.id}`">
+          <strong>新增資料列</strong>
+          <pre>{{ change.sql }}</pre>
+          <small v-for="(param, index) in change.params" :key="index">
+            <code>${{ index + 1 }}</code> = <code>{{ parameterLabel(param) }}</code>
+          </small>
+        </li>
+        <li v-for="change in stagedDeletes" :key="`delete:${identitySignature(change.identity)}`">
+          <strong>刪除 {{ identityLabel(change.identity) }}</strong>
+          <pre>{{ change.sql }}</pre>
+          <small v-for="(param, index) in change.params" :key="index">
+            <code>${{ index + 1 }}</code> = <code>{{ parameterLabel(param) }}</code>
+          </small>
+        </li>
+      </ol>
+      <div class="preview-actions">
+        <button type="button" class="ghost" :disabled="saving" @click="revertAll">全部回復</button>
+        <button type="button" class="write-confirm" :disabled="saving" @click="applyAll">
+          {{ saving ? '套用中…' : `全部套用 ${stagedCount} 項` }}
         </button>
       </div>
     </section>
     <div class="pager">
-      <button :disabled="offset === 0" @click="prevPage">上一頁</button>
-      <button :disabled="isLastPage" @click="nextPage">下一頁</button>
+      <button :disabled="offset === 0 || stagedCount > 0" @click="prevPage">上一頁</button>
+      <button :disabled="isLastPage || stagedCount > 0" @click="nextPage">下一頁</button>
       <!-- exports the currently loaded page - full-table export is a milestone C item -->
       <ResultExport v-if="result && result.columns.length" :result="result" />
       <span v-if="result" class="meta">{{ offset + 1 }}–{{ offset + result.rows.length }} 列・{{ Math.round(result.executionMs) }} ms</span>
@@ -629,11 +771,14 @@ th {
   user-select: none;
 }
 th.sorted { color: var(--brass); }
+th.locked { cursor: not-allowed; }
 .row-actions-head { cursor: default; }
 .dir { font-size: 11px; }
 tbody tr:hover { background: var(--brass-soft); }
 tbody tr:last-child td { border-bottom: none; }
 .isnull { color: var(--muted); font-style: italic; }
+.dirty { background: var(--brass-soft); box-shadow: inset 3px 0 var(--brass); }
+.pending-delete td:not(.row-actions) { opacity: 0.55; text-decoration: line-through; }
 .editable { cursor: text; }
 .editable:focus { outline: 1px solid var(--brass); outline-offset: -2px; }
 .editing { overflow: visible; min-width: 320px; background: var(--panel-2); }
@@ -642,6 +787,7 @@ tbody tr:last-child td { border-bottom: none; }
 .cell-editor label { display: flex; align-items: center; gap: 3px; font-size: 11px; }
 .row-actions { display: flex; gap: 4px; overflow: visible; max-width: none; }
 .delete-row { color: var(--danger); }
+.dirty-badge { color: var(--brass); font: 10px var(--font-data); letter-spacing: 0.08em; }
 
 .row-insert { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
 .row-insert > p { margin: 0; color: var(--muted); font-size: 12px; }
@@ -659,6 +805,14 @@ tbody tr:last-child td { border-bottom: none; }
 .write-confirm { border-color: var(--brass); color: var(--brass); }
 .delete-preview { border-color: var(--danger); }
 .delete-confirm { border-color: var(--danger); color: var(--danger); }
+
+.staged-changes { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--brass); border-radius: var(--radius); background: var(--panel-2); }
+.staged-head { display: flex; justify-content: space-between; gap: 12px; }
+.staged-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.staged-list { display: grid; gap: 8px; margin: 0; padding-left: 24px; }
+.staged-list li { display: grid; gap: 5px; }
+.staged-list pre { margin: 0; padding: 8px; overflow-x: auto; background: var(--ink); color: var(--text); font: 11px var(--font-data); }
+.staged-list small { color: var(--muted); font-family: var(--font-data); }
 
 .pager { display: flex; gap: 8px; align-items: center; }
 .meta { margin-left: auto; font-family: var(--font-data); font-size: 12px; color: var(--muted); }

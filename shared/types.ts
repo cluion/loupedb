@@ -124,6 +124,7 @@ export interface CellUpdateInput {
   readonly value: unknown
   readonly originalValue: unknown
   readonly identity: Readonly<Record<string, unknown>>
+  readonly version?: string
 }
 
 export interface CellUpdateResult {
@@ -147,6 +148,36 @@ export interface RowDeleteInput {
 export interface RowMutationResult {
   readonly affectedRows: 1
   readonly row: Readonly<Record<string, unknown>>
+}
+
+export type TableChange =
+  | {
+      readonly kind: 'update'
+      readonly column: string
+      readonly value: unknown
+      readonly originalValue: unknown
+      readonly identity: Readonly<Record<string, unknown>>
+      readonly version: string
+    }
+  | {
+      readonly kind: 'insert'
+      readonly values: Readonly<Record<string, unknown>>
+    }
+  | {
+      readonly kind: 'delete'
+      readonly identity: Readonly<Record<string, unknown>>
+      readonly version: string
+    }
+
+export interface TableChangesInput {
+  readonly schema: string
+  readonly table: string
+  readonly changes: ReadonlyArray<TableChange>
+}
+
+export interface TableChangesResult {
+  readonly affectedRows: number
+  readonly results: ReadonlyArray<RowMutationResult>
 }
 
 export interface DatabaseError {

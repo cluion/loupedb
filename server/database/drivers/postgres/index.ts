@@ -1,4 +1,4 @@
-import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, RowDeleteInput, RowInsertInput, TransactionState } from '#shared/types'
+import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, RowDeleteInput, RowInsertInput, TableChangesInput, TransactionState } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle, type PostgresSession } from './connection'
 import { listDatabases, listSchemas, listTables, listColumns, listFunctions, describeTable } from './schema'
@@ -27,6 +27,14 @@ function withoutLeadingComments(source: string): string {
 function isTransactionBoundary(source: string): boolean {
   return /^(?:begin\b|start\s+transaction\b|commit\b|end\b|rollback\b|abort\b|prepare\s+transaction\b)/i
     .test(withoutLeadingComments(source))
+}
+
+function changeError(message: string): Error {
+  return Object.assign(new Error(message), { code: 'INVALID_CHANGES', severity: 'ERROR' })
+}
+
+function identitySignature(identity: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(Object.keys(identity).sort().map((key) => [key, identity[key]]))
 }
 
 export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
@@ -286,6 +294,71 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
         }
         return await handle.run((sql) => deleteTableRow(sql, input))
       } finally {
+        unlock()
+      }
+    },
+
+    async applyTableChanges(input: TableChangesInput) {
+      if (!input.changes.length) throw changeError('at least one staged change is required')
+      const deletedRows = new Set(
+        input.changes.filter((change) => change.kind === 'delete')
+          .map((change) => identitySignature(change.identity)),
+      )
+      if (input.changes.some((change) => (
+        change.kind === 'update' && deletedRows.has(identitySignature(change.identity))
+      ))) {
+        throw changeError('a row cannot be updated and deleted in the same batch')
+      }
+
+      const unlock = await acquireTransactionLock()
+      let session: PostgresSession | null = null
+      try {
+        if (!handle) throw new Error('not connected')
+        if (transaction) {
+          throw transactionError('TX_ACTIVE', 'finish the manual transaction before applying table changes')
+        }
+        session = await handle.reserve()
+        await session.sql.unsafe('begin')
+        session.takeMessages()
+        const results = []
+        const versionCheckedRows = new Set<string>()
+        for (const change of input.changes) {
+          if (change.kind === 'insert') {
+            results.push(await insertTableRow(session.sql, {
+              schema: input.schema, table: input.table, values: change.values,
+            }))
+          } else if (change.kind === 'update') {
+            const signature = identitySignature(change.identity)
+            results.push(await updateTableCell(session.sql, {
+              schema: input.schema,
+              table: input.table,
+              column: change.column,
+              value: change.value,
+              originalValue: change.originalValue,
+              identity: change.identity,
+              ...(versionCheckedRows.has(signature) ? {} : { version: change.version }),
+            }))
+            versionCheckedRows.add(signature)
+          } else {
+            results.push(await deleteTableRow(session.sql, {
+              schema: input.schema,
+              table: input.table,
+              identity: change.identity,
+              version: change.version,
+            }))
+          }
+        }
+        await session.sql.unsafe('commit')
+        session.takeMessages()
+        return { affectedRows: results.length, results }
+      } catch (cause) {
+        if (session) {
+          try { await session.sql.unsafe('rollback') } catch { /* preserve the original mutation error */ }
+          session.takeMessages()
+        }
+        throw cause
+      } finally {
+        session?.release()
         unlock()
       }
     },

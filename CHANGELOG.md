@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Staged Data Changes**：DataGrid 的 cell update、insert／Clone 與 delete 先保留在瀏覽器並標記 dirty，提供完整 parameterized SQL 清單、全部回復與全部套用；批次依暫存順序在同一 PostgreSQL transaction 內執行，每列首次寫入同時比對原值與 `xmin`，任一 stale row 或寫入錯誤會 rollback 整批且保留待處理清單；切換資料表、結構頁或離開網頁前會阻止未確認的變更遺失
+
 ## [0.13.0] - 2026-07-18
 
 ### Added
