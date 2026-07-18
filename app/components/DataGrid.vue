@@ -17,6 +17,13 @@ import {
   type TableChange,
   type TableSchema,
 } from '#shared/types'
+import {
+  DEFAULT_COLUMN_WIDTH,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
+  clampColumnWidth,
+  useTableColumnDisplay,
+} from '../stores/tableColumnDisplay'
 import { useTableFilterHistory, type TableFilterHistoryEntry } from '../stores/tableFilterHistory'
 
 const props = withDefaults(defineProps<{
@@ -77,13 +84,14 @@ const filterCombinator = ref<BrowseFilterCombinator>('and')
 const filterConditions = ref<FilterDraftCondition[]>([createFilterCondition()])
 const appliedFilters = ref<ReadonlyArray<BrowseFilterCondition>>([])
 const appliedFilterCombinator = ref<BrowseFilterCombinator>('and')
-const filterHistoryScope = [
+const tableScope = [
   props.historyLabel || props.connectionId,
   props.database,
   props.schema,
   props.table,
 ].join('\u001f')
-const filterHistory = useTableFilterHistory(filterHistoryScope)
+const filterHistory = useTableFilterHistory(tableScope)
+const columnDisplay = useTableColumnDisplay(tableScope)
 
 interface CellEditorState {
   readonly rowIndex: number
@@ -169,8 +177,29 @@ const isConnectionReadOnly = computed(() => props.safetyMode === 'read-only')
 const stagedNeedsSafetyConfirmation = computed(() => (
   stagedChanges.value.some((change) => change.kind === 'update' || change.kind === 'delete')
 ))
+const orderedColumns = computed<ReadonlyArray<ColumnInfo>>(() => {
+  const byName = new Map((result.value?.columns ?? []).map((column) => [column.name, column]))
+  return columnDisplay.settings.value.order
+    .map((name) => byName.get(name))
+    .filter((column): column is ColumnInfo => Boolean(column))
+})
+const hiddenColumns = computed(() => new Set(columnDisplay.settings.value.hidden))
+const visibleColumns = computed(() => orderedColumns.value.filter((column) => !hiddenColumns.value.has(column.name)))
+const frozenColumns = computed(() => visibleColumns.value.slice(0, columnDisplay.settings.value.frozenCount))
+const frozenOffsets = computed(() => {
+  const offsets = new Map<string, number>()
+  let left = 0
+  for (const column of frozenColumns.value) {
+    offsets.set(column.name, left)
+    left += columnWidth(column.name)
+  }
+  return offsets
+})
 watch(stagedCount, (count) => emit('dirty-state', count > 0), { immediate: true })
-onUnmounted(() => emit('dirty-state', false))
+onUnmounted(() => {
+  emit('dirty-state', false)
+  stopColumnResize()
+})
 
 async function load() {
   error.value = null
@@ -182,7 +211,10 @@ async function load() {
       orderBy: orderBy.value, orderDir: orderDir.value, filter,
       filterCombinator: filter ? appliedFilterCombinator.value : undefined,
     })
-    if (r.ok) result.value = r.data
+    if (r.ok) {
+      result.value = r.data
+      columnDisplay.reconcile(r.data.columns.map((column) => column.name))
+    }
     else error.value = r.error.message
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -224,6 +256,117 @@ function sort(col: string) {
   if (orderBy.value === col) orderDir.value = orderDir.value === 'asc' ? 'desc' : 'asc'
   else { orderBy.value = col; orderDir.value = 'asc' }
   load()
+}
+
+function columnWidth(column: string): number {
+  return columnDisplay.settings.value.widths[column] ?? DEFAULT_COLUMN_WIDTH
+}
+
+function updateColumnWidth(column: string, width: number, persistNow = true) {
+  columnDisplay.update({
+    ...columnDisplay.settings.value,
+    widths: { ...columnDisplay.settings.value.widths, [column]: clampColumnWidth(width) },
+  }, persistNow)
+}
+
+function updateColumnWidthFromInput(column: string, event: Event) {
+  const value = Number((event.target as HTMLInputElement).value)
+  updateColumnWidth(column, value)
+}
+
+function toggleColumn(column: string) {
+  if (stagedCount.value) return
+  const hidden = new Set(columnDisplay.settings.value.hidden)
+  if (hidden.has(column)) hidden.delete(column)
+  else {
+    if (visibleColumns.value.length <= 1) return
+    hidden.add(column)
+  }
+  const visibleCount = columnDisplay.settings.value.order.filter((name) => !hidden.has(name)).length
+  columnDisplay.update({
+    ...columnDisplay.settings.value,
+    hidden: columnDisplay.settings.value.order.filter((name) => hidden.has(name)),
+    frozenCount: Math.min(columnDisplay.settings.value.frozenCount, visibleCount),
+  })
+}
+
+function moveColumn(column: string, delta: -1 | 1) {
+  if (stagedCount.value) return
+  const order = [...columnDisplay.settings.value.order]
+  const from = order.indexOf(column)
+  const to = from + delta
+  if (from < 0 || to < 0 || to >= order.length) return
+  ;[order[from], order[to]] = [order[to]!, order[from]!]
+  columnDisplay.update({ ...columnDisplay.settings.value, order })
+}
+
+function freezeThrough(column: string) {
+  if (stagedCount.value || hiddenColumns.value.has(column)) return
+  const index = visibleColumns.value.findIndex((candidate) => candidate.name === column)
+  if (index < 0) return
+  columnDisplay.update({ ...columnDisplay.settings.value, frozenCount: index + 1 })
+}
+
+function clearFrozenColumns() {
+  if (stagedCount.value) return
+  columnDisplay.update({ ...columnDisplay.settings.value, frozenCount: 0 })
+}
+
+function resetColumnDisplay() {
+  if (stagedCount.value) return
+  columnDisplay.reset(result.value?.columns.map((column) => column.name) ?? [])
+}
+
+function columnStyle(column: string): Record<string, string> {
+  const width = `${columnWidth(column)}px`
+  const style: Record<string, string> = { width, minWidth: width, maxWidth: width }
+  const frozenLeft = frozenOffsets.value.get(column)
+  if (frozenLeft !== undefined) style['--frozen-left'] = `${frozenLeft}px`
+  return style
+}
+
+function isFrozenColumn(column: string): boolean {
+  return frozenOffsets.value.has(column)
+}
+
+function isLastFrozenColumn(column: string): boolean {
+  return frozenColumns.value.at(-1)?.name === column
+}
+
+interface ColumnResizeState {
+  readonly column: string
+  readonly startX: number
+  readonly startWidth: number
+}
+
+let columnResize: ColumnResizeState | null = null
+
+function startColumnResize(event: PointerEvent, column: string) {
+  if (stagedCount.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  columnResize = { column, startX: event.clientX, startWidth: columnWidth(column) }
+  window.addEventListener('pointermove', resizeColumn)
+  window.addEventListener('pointerup', stopColumnResize)
+  window.addEventListener('pointercancel', stopColumnResize)
+}
+
+function resizeColumn(event: PointerEvent) {
+  if (!columnResize) return
+  updateColumnWidth(
+    columnResize.column,
+    columnResize.startWidth + event.clientX - columnResize.startX,
+    false,
+  )
+}
+
+function stopColumnResize() {
+  if (!columnResize) return
+  columnResize = null
+  columnDisplay.persist()
+  window.removeEventListener('pointermove', resizeColumn)
+  window.removeEventListener('pointerup', stopColumnResize)
+  window.removeEventListener('pointercancel', stopColumnResize)
 }
 
 function filterNeedsValue(op: BrowseFilterOperator): boolean {
@@ -762,18 +905,89 @@ async function applyAll() {
         <button type="button" class="ghost clear-filter-history" @click="filterHistory.clear">清除篩選歷史</button>
       </details>
     </section>
+    <details v-if="result" class="column-display" data-testid="column-display-settings">
+      <summary>
+        欄位設定・顯示 {{ visibleColumns.length }}/{{ orderedColumns.length }}
+        <template v-if="columnDisplay.settings.value.frozenCount">
+          ・凍結 {{ columnDisplay.settings.value.frozenCount }}
+        </template>
+      </summary>
+      <p>拖曳欄名右側可調整寬度；此處可隱藏、排序或凍結前置欄位。</p>
+      <ul>
+        <li v-for="(column, index) in orderedColumns" :key="column.name">
+          <label class="column-visible">
+            <input
+              type="checkbox"
+              :checked="!hiddenColumns.has(column.name)"
+              :aria-label="`顯示欄位 ${column.name}`"
+              :disabled="stagedCount > 0 || (!hiddenColumns.has(column.name) && visibleColumns.length <= 1)"
+              @change="toggleColumn(column.name)"
+            >
+            <code>{{ column.name }}</code>
+          </label>
+          <label class="column-width">
+            <span>寬度</span>
+            <input
+              type="number"
+              :min="MIN_COLUMN_WIDTH"
+              :max="MAX_COLUMN_WIDTH"
+              :value="columnWidth(column.name)"
+              :aria-label="`欄位 ${column.name} 寬度`"
+              :disabled="stagedCount > 0"
+              @change="updateColumnWidthFromInput(column.name, $event)"
+            >
+          </label>
+          <div class="column-order-actions">
+            <button
+              type="button" class="ghost" :aria-label="`欄位 ${column.name} 左移`"
+              :disabled="stagedCount > 0 || index === 0" @click="moveColumn(column.name, -1)"
+            >←</button>
+            <button
+              type="button" class="ghost" :aria-label="`欄位 ${column.name} 右移`"
+              :disabled="stagedCount > 0 || index === orderedColumns.length - 1" @click="moveColumn(column.name, 1)"
+            >→</button>
+            <button
+              type="button" class="ghost freeze-through" :aria-label="`凍結至欄位 ${column.name}`"
+              :disabled="stagedCount > 0 || hiddenColumns.has(column.name)" @click="freezeThrough(column.name)"
+            >凍結至此</button>
+          </div>
+        </li>
+      </ul>
+      <div class="column-display-actions">
+        <button
+          type="button" class="ghost"
+          :disabled="stagedCount > 0 || columnDisplay.settings.value.frozenCount === 0"
+          @click="clearFrozenColumns"
+        >解除凍結</button>
+        <button type="button" class="ghost" :disabled="stagedCount > 0" @click="resetColumnDisplay">重設欄位設定</button>
+      </div>
+    </details>
     <div v-if="loading && !result" class="loading">載入中…</div>
     <div class="scroll">
       <table v-if="result">
         <thead>
           <tr>
             <th
-              v-for="c in result.columns" :key="c.name"
-              :class="{ sorted: orderBy === c.name, locked: stagedCount > 0 }"
+              v-for="c in visibleColumns" :key="c.name"
+              :class="{
+                sorted: orderBy === c.name,
+                locked: stagedCount > 0,
+                'frozen-column': isFrozenColumn(c.name),
+                'last-frozen-column': isLastFrozenColumn(c.name),
+              }"
+              :style="columnStyle(c.name)"
+              :data-column="c.name"
               :title="stagedCount > 0 ? '請先套用或回復待處理變更' : undefined"
               @click="sort(c.name)"
             >
               {{ c.name }}<span v-if="orderBy === c.name" class="dir">{{ orderDir === 'asc' ? ' ↑' : ' ↓' }}</span>
+              <span
+                class="column-resizer"
+                :class="{ disabled: stagedCount > 0 }"
+                aria-hidden="true"
+                @pointerdown="startColumnResize($event, c.name)"
+                @click.stop
+              />
             </th>
             <th class="row-actions-head">操作</th>
           </tr>
@@ -781,13 +995,17 @@ async function applyAll() {
         <tbody>
           <tr v-for="(row, i) in result.rows" :key="i" :class="{ 'pending-delete': isStagedDelete(row) }">
             <td
-              v-for="c in result.columns"
+              v-for="c in visibleColumns"
               :key="c.name"
+              :style="columnStyle(c.name)"
+              :data-column="c.name"
               :class="{
                 isnull: cellValue(row, c.name) === null,
                 editable: canEditCell(c, row, i),
                 editing: editor?.rowIndex === i && editor.column === c.name,
                 dirty: Boolean(stagedUpdateFor(row, c.name)),
+                'frozen-column': isFrozenColumn(c.name),
+                'last-frozen-column': isLastFrozenColumn(c.name),
               }"
               :tabindex="canEditCell(c, row, i) ? 0 : undefined"
               :title="canEditCell(c, row, i) ? '雙擊或按 Enter 編輯' : undefined"
@@ -818,7 +1036,7 @@ async function applyAll() {
             <td class="row-actions">
               <button
                 type="button" class="ghost" :aria-label="`Clone 第 ${offset + i + 1} 列`"
-                :disabled="isStagedDelete(row) || isConnectionReadOnly" @click="startInsert(row)"
+                :disabled="saving || isStagedDelete(row) || isConnectionReadOnly" @click="startInsert(row)"
               >
                 Clone
               </button>
@@ -826,7 +1044,7 @@ async function applyAll() {
                 type="button"
                 class="ghost delete-row"
                 :aria-label="`刪除第 ${offset + i + 1} 列`"
-                :disabled="!canDeleteRow(row, i)"
+                :disabled="saving || !canDeleteRow(row, i)"
                 @click="prepareDelete(row, i)"
               >刪除</button>
               <span v-if="isStagedDelete(row)" class="dirty-badge">待刪除</span>
@@ -994,14 +1212,32 @@ async function applyAll() {
 .remove-filter { padding-inline: 7px; color: var(--muted); }
 .clear-filter-history { font-size: 11px; }
 
+.column-display { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.column-display summary { color: var(--glass); cursor: pointer; font-size: 12px; }
+.column-display > p { margin: 8px 0; color: var(--muted); font-size: 11px; }
+.column-display ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.column-display li { display: grid; grid-template-columns: minmax(140px, 1fr) 130px auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.column-display li:last-child { border-bottom: 0; }
+.column-visible, .column-width, .column-order-actions, .column-display-actions { display: flex; align-items: center; gap: 6px; }
+.column-visible code { overflow: hidden; text-overflow: ellipsis; }
+.column-width { color: var(--muted); font-size: 11px; }
+.column-width input { width: 76px; }
+.column-order-actions { justify-content: flex-end; }
+.column-order-actions button { padding-inline: 8px; }
+.freeze-through { min-width: 76px; }
+.column-display-actions { justify-content: flex-end; margin-top: 8px; }
+
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table {
   border-collapse: collapse;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
   font-family: var(--font-data);
   font-size: 13px;
 }
 th, td {
+  box-sizing: border-box;
   text-align: left;
   padding: 6px 12px;
   border-bottom: 1px solid var(--line);
@@ -1013,24 +1249,34 @@ th, td {
 th {
   position: sticky;
   top: 0;
+  z-index: 3;
   background: var(--panel-2);
   color: var(--glass); /* column names in lens-glass blue */
   font-weight: 500;
   cursor: pointer;
   user-select: none;
 }
+.column-resizer { position: absolute; top: 0; right: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+.column-resizer::after { content: ''; position: absolute; top: 20%; right: 2px; bottom: 20%; width: 1px; background: var(--line); }
+.column-resizer:hover::after { background: var(--brass); }
+.column-resizer.disabled { cursor: not-allowed; }
+.frozen-column { position: sticky; left: var(--frozen-left); z-index: 2; background: var(--panel); }
+th.frozen-column { z-index: 4; background: var(--panel-2); }
+.last-frozen-column { box-shadow: inset -1px 0 var(--brass); }
 th.sorted { color: var(--brass); }
 th.locked { cursor: not-allowed; }
 .row-actions-head { cursor: default; }
 .dir { font-size: 11px; }
 tbody tr:hover { background: var(--brass-soft); }
+tbody tr:hover td.frozen-column { background: var(--panel-2); }
 tbody tr:last-child td { border-bottom: none; }
 .isnull { color: var(--muted); font-style: italic; }
 .dirty { background: var(--brass-soft); box-shadow: inset 3px 0 var(--brass); }
 .pending-delete td:not(.row-actions) { opacity: 0.55; text-decoration: line-through; }
 .editable { cursor: text; }
 .editable:focus { outline: 1px solid var(--brass); outline-offset: -2px; }
-.editing { overflow: visible; min-width: 320px; background: var(--panel-2); }
+.editing { z-index: 5; overflow: visible; min-width: 320px; background: var(--panel-2); }
+.editing:not(.frozen-column) { position: relative; }
 .cell-editor { display: flex; align-items: center; gap: 6px; color: var(--text); font-style: normal; }
 .cell-editor > input[type="text"], .cell-editor > input:not([type]) { min-width: 120px; flex: 1; }
 .cell-editor label { display: flex; align-items: center; gap: 3px; font-size: 11px; }
@@ -1072,6 +1318,8 @@ tbody tr:last-child td { border-bottom: none; }
   .filter-actions button:nth-last-child(2) { margin-left: 0; }
   .filter-history li { grid-template-columns: minmax(0, 1fr) 30px; }
   .filter-history time { display: none; }
+  .column-display li { grid-template-columns: minmax(0, 1fr) 112px; }
+  .column-order-actions { grid-column: 1 / 3; justify-content: flex-start; padding-left: 24px; }
   .insert-field { grid-template-columns: 1fr; }
 }
 </style>

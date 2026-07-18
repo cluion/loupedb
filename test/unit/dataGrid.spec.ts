@@ -37,6 +37,7 @@ const props = { connectionId: 'c1', schema: 'public', table: 'items' }
 const fullPage = [...Array(50)].map((_, i) => ({ id: i, label: `row${i}` }))
 
 beforeEach(() => {
+  localStorage.clear()
   browseMock.mockReset()
   browseMock.mockResolvedValue(result([{ id: 1, label: 'a' }]) as never)
   describeMock.mockReset()
@@ -83,6 +84,41 @@ describe('DataGrid', () => {
     expect(browseMock).toHaveBeenLastCalledWith('public', 'items', expect.objectContaining({ orderBy: 'id', orderDir: 'asc' }))
     await w.find('th').trigger('click')
     expect(browseMock).toHaveBeenLastCalledWith('public', 'items', expect.objectContaining({ orderBy: 'id', orderDir: 'desc' }))
+  })
+
+  it('reorders, hides and resets visible columns', async () => {
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, database: 'appdb', historyLabel: 'column-order' },
+    })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.get('[aria-label="欄位 label 左移"]').trigger('click')
+    expect(w.findAll('th').map(header => header.text())).toEqual(['label', 'id', '操作'])
+
+    await w.get('[aria-label="顯示欄位 id"]').setValue(false)
+    expect(w.findAll('th').map(header => header.text())).toEqual(['label', '操作'])
+    expect(w.get('[aria-label="顯示欄位 label"]').attributes('disabled')).toBeDefined()
+
+    await w.findAll('button').find(button => button.text() === '重設欄位設定')!.trigger('click')
+    expect(w.findAll('th').map(header => header.text())).toEqual(['id', 'label', '操作'])
+  })
+
+  it('sets column widths, freezes leading columns and persists the settings', async () => {
+    const displayProps = { ...props, database: 'appdb', historyLabel: 'column-persist' }
+    const w = await mountSuspended(DataGrid, { props: displayProps })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.get('[aria-label="欄位 id 寬度"]').setValue('240')
+    await w.get('[aria-label="凍結至欄位 label"]').trigger('click')
+    expect(w.get('th[data-column="id"]').attributes('style')).toContain('width: 240px')
+    expect(w.get('th[data-column="id"]').classes()).toContain('frozen-column')
+    expect(w.get('th[data-column="label"]').classes()).toContain('last-frozen-column')
+    w.unmount()
+
+    const restored = await mountSuspended(DataGrid, { props: displayProps })
+    await vi.waitFor(() => expect(restored.find('table').exists()).toBe(true))
+    expect(restored.get('th[data-column="id"]').attributes('style')).toContain('width: 240px')
+    expect(restored.get('th[data-column="label"]').classes()).toContain('frozen-column')
+    await restored.findAll('button').find(button => button.text() === '解除凍結')!.trigger('click')
+    expect(restored.find('th.frozen-column').exists()).toBe(false)
   })
 
   it('next page advances offset; last page disables next button', async () => {

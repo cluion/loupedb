@@ -68,6 +68,23 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await filterBuilder.getByRole('button', { name: '清除', exact: true }).click()
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
 
+  // per-table column display settings support reorder, drag resize, freeze and hide
+  const columnDisplay = page.getByTestId('column-display-settings')
+  await columnDisplay.locator('summary').click()
+  await columnDisplay.getByRole('button', { name: '欄位 label 左移' }).click()
+  const labelHeader = page.locator('th[data-column="label"]')
+  const labelBox = await labelHeader.boundingBox()
+  if (!labelBox) throw new Error('label header is not visible')
+  await page.mouse.move(labelBox.x + labelBox.width - 2, labelBox.y + labelBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(labelBox.x + labelBox.width + 58, labelBox.y + labelBox.height / 2)
+  await page.mouse.up()
+  await expect(labelHeader).toHaveAttribute('style', /width: 240px/u)
+  await columnDisplay.getByRole('button', { name: '凍結至欄位 label' }).click()
+  await columnDisplay.getByRole('checkbox', { name: '顯示欄位 id' }).uncheck()
+  await expect(page.locator('th[data-column="id"]')).toHaveCount(0)
+  await expect(labelHeader).toHaveClass(/frozen-column/u)
+
   // edits stay local with a dirty marker until the atomic batch is applied
   await expect(page.getByTestId('editability-status')).toContainText('可編輯')
   await page.getByRole('cell', { name: 'x', exact: true }).dblclick()
@@ -142,6 +159,9 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).not.toBeVisible()
 
   await page.getByRole('button', { name: 'items', exact: true }).click()
+  await expect(page.locator('th[data-column="id"]')).toHaveCount(0)
+  await expect(page.locator('th[data-column="label"]')).toHaveAttribute('style', /width: 240px/u)
+  await expect(page.locator('th[data-column="label"]')).toHaveClass(/frozen-column/u)
 
   // structure tab shows columns with pk badge
   await page.getByRole('button', { name: '結構' }).click()

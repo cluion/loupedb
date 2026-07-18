@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **欄位顯示設定**：DataGrid 可隱藏與重新排序欄位、拖曳表頭或輸入數值調整 80–600px 欄寬，並凍結前置可見欄位供水平捲動比對；設定依連線名稱、資料庫與資料表保存在瀏覽器，schema 新增或移除欄位時會自動合併並維持至少一個可見欄位
+
 ## [0.16.0] - 2026-07-18
 
 ### Added
