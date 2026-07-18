@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **PostgreSQL Function Autocomplete**：SQL 編輯器載入非系統 schema 中目前帳號可執行的 function、aggregate 與 window function，補全項目顯示呼叫形式、參數簽名與回傳型別；同名 overload 合併顯示，選取後插入函式呼叫開頭
+
 ## [0.8.0] - 2026-07-18
 
 ### Added

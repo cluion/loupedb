@@ -79,6 +79,13 @@ export interface SchemaInfo { readonly name: string }
 export interface TableInfo { readonly schema: string; readonly name: string }
 // one flat row per column - bulk metadata for editor autocomplete
 export interface TableColumnInfo { readonly table: string; readonly name: string }
+export interface DatabaseFunctionInfo {
+  readonly schema: string
+  readonly name: string
+  readonly arguments: string
+  readonly resultType: string
+  readonly kind: 'function' | 'aggregate' | 'window'
+}
 export interface ForeignKeyInfo {
   readonly name: string
   readonly columns: ReadonlyArray<string>

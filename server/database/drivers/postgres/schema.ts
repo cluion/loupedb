@@ -1,5 +1,5 @@
 import type postgres from 'postgres'
-import type { DatabaseInfo, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
+import type { DatabaseFunctionInfo, DatabaseInfo, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
@@ -40,6 +40,27 @@ export async function listColumns(sql: Sql, schema: string): Promise<ReadonlyArr
     where c.table_schema = ${schema} and t.table_type = 'BASE TABLE'
     order by c.table_name, c.ordinal_position`
   return rows.map((r) => ({ table: String(r.tbl), name: String(r.name) }))
+}
+
+export async function listFunctions(sql: Sql, schema: string): Promise<ReadonlyArray<DatabaseFunctionInfo>> {
+  const rows = await sql`
+    select p.proname as name,
+           pg_get_function_identity_arguments(p.oid) as arguments,
+           pg_get_function_result(p.oid) as result_type,
+           p.prokind as kind
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = ${schema}
+      and p.prokind in ('f', 'a', 'w')
+      and has_function_privilege(p.oid, 'EXECUTE')
+    order by p.proname, pg_get_function_identity_arguments(p.oid)`
+  return rows.map((r) => ({
+    schema,
+    name: String(r.name),
+    arguments: String(r.arguments ?? ''),
+    resultType: String(r.result_type),
+    kind: r.kind === 'a' ? 'aggregate' : r.kind === 'w' ? 'window' : 'function',
+  }))
 }
 
 export async function describeTable(sql: Sql, schema: string, table: string): Promise<TableSchema> {

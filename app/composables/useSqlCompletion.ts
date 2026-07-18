@@ -14,11 +14,14 @@ export function useSqlCompletion(connId: string) {
       const schemas = await api.schemas()
       if (!schemas.ok) return
       const metadata = await Promise.all(schemas.data.map(async (s) => {
-        const [tables, columns] = await Promise.all([api.tables(s.name), api.columns(s.name)])
+        const [tables, columns, functions] = await Promise.all([
+          api.tables(s.name), api.columns(s.name), api.functions(s.name),
+        ])
         return {
           schema: s.name,
           tables: tables.ok ? tables.data : [],
           columns: columns.ok ? columns.data : [],
+          functions: functions.ok ? functions.data : [],
         }
       }))
       namespace.value = buildSqlNamespace(metadata)

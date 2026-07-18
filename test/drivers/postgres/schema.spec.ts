@@ -27,6 +27,10 @@ async function setup(): Promise<DatabaseDriver> {
     id serial primary key,
     author_id int not null references app.users (id)
   )`).simple()
+  await seedSql.unsafe(`create function app.user_label(user_id integer)
+    returns text language sql stable as $$ select 'user-' || user_id::text $$`).simple()
+  await seedSql.unsafe(`create function app.user_label(user_id bigint)
+    returns text language sql stable as $$ select 'user-' || user_id::text $$`).simple()
   await seedSql.end()
 
   const driver = createPostgresDriver({
@@ -73,6 +77,20 @@ describe('postgres driver schema exploration', () => {
     const users = cols.filter(c => c.table === 'users').map(c => c.name)
     expect(users).toEqual(['id', 'name', 'data', 'fav', 'created']) // ordinal order
     expect(cols.filter(c => c.table === 'posts').map(c => c.name)).toEqual(['id', 'author_id'])
+    await driver.disconnect()
+  })
+
+  it('listFunctions returns callable functions with signatures and result types', async () => {
+    const driver = await setup()
+    const functions = await driver.listFunctions('app')
+    expect(functions.filter(fn => fn.name === 'user_label')).toEqual([
+      {
+        schema: 'app', name: 'user_label', arguments: 'user_id bigint', resultType: 'text', kind: 'function',
+      },
+      {
+        schema: 'app', name: 'user_label', arguments: 'user_id integer', resultType: 'text', kind: 'function',
+      },
+    ])
     await driver.disconnect()
   })
 

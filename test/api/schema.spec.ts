@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setup, $fetch } from '@nuxt/test-utils/e2e'
 import postgres from 'postgres'
 import { startPgContainer, type PgTestHandle } from '../helpers/pg-container'
-import type { Envelope, TableSchema, SchemaInfo, TableInfo, TableColumnInfo } from '#shared/types'
+import type { DatabaseFunctionInfo, Envelope, TableSchema, SchemaInfo, TableInfo, TableColumnInfo } from '#shared/types'
 
 process.env.LOUPEDB_MASTER_KEY = 'a'.repeat(64)
 process.env.LOUPEDB_DATA_DIR = mkdtempSync(join(tmpdir(), 'loupedb-api-'))
@@ -24,6 +24,8 @@ describe('schema exploration API', async () => {
     })
     await seedSql.unsafe(`create schema app`).simple()
     await seedSql.unsafe(`create table app.users (id serial primary key, name text not null)`).simple()
+    await seedSql.unsafe(`create function app.user_label(user_id integer)
+      returns text language sql stable as $$ select 'user-' || user_id::text $$`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -56,6 +58,16 @@ describe('schema exploration API', async () => {
     if (r.ok) {
       expect(r.data).toContainEqual({ table: 'users', name: 'id' })
       expect(r.data).toContainEqual({ table: 'users', name: 'name' })
+    }
+  })
+
+  it('GET /functions?schema=app lists function completion metadata', async () => {
+    const r = await $fetch<Envelope<DatabaseFunctionInfo[]>>(`/api/connections/${connId}/functions?schema=app`)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data).toContainEqual({
+        schema: 'app', name: 'user_label', arguments: 'user_id integer', resultType: 'text', kind: 'function',
+      })
     }
   })
 

@@ -14,23 +14,55 @@ describe('buildSqlNamespace', () => {
           { table: 'items', name: 'id' },
           { table: 'items', name: 'label' },
         ],
+        functions: [
+          {
+            schema: 'public', name: 'total_items', arguments: '', resultType: 'bigint', kind: 'function',
+          },
+          {
+            schema: 'public', name: 'score', arguments: 'value integer', resultType: 'integer', kind: 'function',
+          },
+          {
+            schema: 'public', name: 'score', arguments: 'value numeric', resultType: 'numeric', kind: 'function',
+          },
+        ],
       },
-      { schema: 'app', tables: [{ schema: 'app', name: 'users' }], columns: [{ table: 'users', name: 'id' }] },
+      {
+        schema: 'app', tables: [{ schema: 'app', name: 'users' }],
+        columns: [{ table: 'users', name: 'id' }], functions: [],
+      },
     ])
     expect(ns).toEqual({
-      public: { items: ['id', 'label'], bare: [] },
+      public: {
+        items: ['id', 'label'],
+        bare: [],
+        'total_items()': {
+          self: { label: 'total_items()', type: 'function', detail: '() → bigint', apply: 'total_items(' },
+          children: [],
+        },
+        'score()': {
+          self: {
+            label: 'score()', type: 'function', detail: '2 overloads',
+            info: '(value integer) → integer\n(value numeric) → numeric', apply: 'score(',
+          },
+          children: [],
+        },
+      },
       app: { users: ['id'] },
     })
   })
 })
 
-const { schemasMock, tablesMock, columnsMock } = vi.hoisted(() => ({
+const { schemasMock, tablesMock, columnsMock, functionsMock } = vi.hoisted(() => ({
   schemasMock: vi.fn(async () => ({ ok: true as const, data: [{ name: 'public' }] })),
   tablesMock: vi.fn(async () => ({ ok: true as const, data: [{ schema: 'public', name: 'items' }] })),
   columnsMock: vi.fn(async () => ({ ok: true as const, data: [{ table: 'items', name: 'id' }] })),
+  functionsMock: vi.fn(async () => ({
+    ok: true as const,
+    data: [{ schema: 'public', name: 'lookup_item', arguments: 'id integer', resultType: 'text', kind: 'function' }],
+  })),
 }))
 mockNuxtImport('useSchema', () => () => ({
-  schemas: schemasMock, tables: tablesMock, columns: columnsMock,
+  schemas: schemasMock, tables: tablesMock, columns: columnsMock, functions: functionsMock,
   databases: vi.fn(), describe: vi.fn(),
 }))
 
@@ -38,7 +70,17 @@ describe('useSqlCompletion', () => {
   it('loads schemas, tables and columns into a namespace', async () => {
     const c = useSqlCompletion('conn-load')
     await c.ensureLoaded()
-    expect(c.namespace.value).toEqual({ public: { items: ['id'] } })
+    expect(c.namespace.value).toEqual({
+      public: {
+        items: ['id'],
+        'lookup_item()': {
+          self: {
+            label: 'lookup_item()', type: 'function', detail: '(id integer) → text', apply: 'lookup_item(',
+          },
+          children: [],
+        },
+      },
+    })
   })
 
   it('caches per connection id and does not refetch', async () => {

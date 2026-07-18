@@ -14,6 +14,7 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.fill('input[placeholder="username"]', process.env.E2E_PG_USER!)
   await page.fill('input[placeholder="password"]', process.env.E2E_PG_PASS!)
   const columnsLoaded = page.waitForResponse((r) => r.url().includes('/columns'))
+  const functionsLoaded = page.waitForResponse((r) => r.url().includes('/functions'))
   await page.click('button[type="submit"]')
 
   // connected: main workspace appears
@@ -25,6 +26,16 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.keyboard.type('select * from ite')
   await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('items')
   await page.keyboard.press('Escape')
+
+  // user-schema PostgreSQL functions include signatures and insert a call
+  await functionsLoaded
+  await page.locator('.cm-content').fill('select double_v')
+  await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('double_value()')
+  await page.locator('.cm-completionLabel', { hasText: 'double_value()' }).click()
+  await expect(page.locator('.cm-content')).toContainText('select double_value(')
+  await page.locator('.cm-content').fill('select double_value(21) as doubled')
+  await page.getByRole('button', { name: '執行', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '42', exact: true })).toBeVisible()
 
   // tree: expand database (opens a sibling session), then schema, then table
   await page.getByRole('button', { name: new RegExp(process.env.E2E_PG_DB!) }).click()

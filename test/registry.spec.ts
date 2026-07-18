@@ -8,6 +8,7 @@ const fakeDriver = (config: ConnectionConfig): DatabaseDriver => ({
   async connect() {}, async disconnect() {}, status: 'closed',
   async listDatabases() { return [] },
   async listSchemas() { return [] }, async listTables() { return [] },
+  async listFunctions() { return [] },
   async describeTable() { return { schema: '', table: '', columns: [], primaryKey: [], foreignKeys: [] } },
   async execute() { return { columns: [], rows: [], executionMs: 0 } },
   async* executeScript() {},

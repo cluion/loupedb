@@ -1,4 +1,4 @@
-import type { ConnectionConfig, ConnectionStatus, DatabaseInfo, QueryResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, BrowseOpts, TransactionState } from '#shared/types'
+import type { ConnectionConfig, ConnectionStatus, DatabaseFunctionInfo, DatabaseInfo, QueryResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, BrowseOpts, TransactionState } from '#shared/types'
 
 export interface DatabaseDriver {
   readonly config: ConnectionConfig
@@ -9,6 +9,7 @@ export interface DatabaseDriver {
   listSchemas(): Promise<ReadonlyArray<SchemaInfo>>
   listTables(schema: string): Promise<ReadonlyArray<TableInfo>>
   listColumns(schema: string): Promise<ReadonlyArray<TableColumnInfo>>
+  listFunctions(schema: string): Promise<ReadonlyArray<DatabaseFunctionInfo>>
   describeTable(schema: string, table: string): Promise<TableSchema>
   execute(sql: string, params?: ReadonlyArray<unknown>, queryId?: string): Promise<QueryResult>
   executeScript(statements: ReadonlyArray<string>, queryId?: string): AsyncIterable<QueryResult>
