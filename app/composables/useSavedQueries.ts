@@ -1,4 +1,4 @@
-import type { Envelope, SavedQuery } from '#shared/types'
+import type { Envelope, SavedQuery, SavedQueryOrganizationPatch } from '#shared/types'
 
 export function useSavedQueries() {
   return {
@@ -8,6 +8,11 @@ export function useSavedQueries() {
     async save(name: string, sql: string) {
       return await $fetch<Envelope<SavedQuery>>('/api/saved-queries', {
         method: 'POST', body: { name, sql },
+      })
+    },
+    async organize(name: string, patch: SavedQueryOrganizationPatch) {
+      return await $fetch<Envelope<SavedQuery>>(`/api/saved-queries/${encodeURIComponent(name)}`, {
+        method: 'PATCH', body: patch,
       })
     },
     async remove(name: string) {

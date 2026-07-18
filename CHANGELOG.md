@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **已存查詢整理**：可將查詢加入收藏並以資料夾、標籤分類，支援收藏／資料夾／標籤篩選及跨欄位搜尋；舊版 `saved-queries.json` 會自動套用相容預設值，同名更新 SQL 時保留整理資訊
+
 ## [0.9.0] - 2026-07-18
 
 ### Added

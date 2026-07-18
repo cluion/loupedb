@@ -26,7 +26,13 @@ export default defineEventHandler(async (event) => {
     const existing = list.find((q) => q.name === name)
     const now = Date.now()
     const saved: SavedQuery = {
-      name, sql, createdAt: existing?.createdAt ?? now, updatedAt: now,
+      name,
+      sql,
+      favorite: existing?.favorite ?? false,
+      folder: existing?.folder ?? null,
+      tags: existing?.tags ?? [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
     }
     await saveSavedQueries([...list.filter((q) => q.name !== name), saved])
     return ok(saved)

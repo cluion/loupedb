@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SavedQuery, SqlExecutionResult } from '#shared/types'
+import type { SavedQuery, SavedQueryOrganizationPatch, SqlExecutionResult } from '#shared/types'
 import { useSqlWorkspace, type SqlTab, type SqlTabContext } from '../stores/sqlWorkspace'
 import { useQueryHistory } from '../stores/queryHistory'
 
@@ -87,13 +87,33 @@ const drawer = ref<'history' | 'saved' | null>(null)
 const savedQueries = ref<ReadonlyArray<SavedQuery>>([])
 const savedError = ref<string | null>(null)
 const savedSearch = ref('')
+const savedFolderFilter = ref('')
+const savedTagFilter = ref('')
+const savedFavoritesOnly = ref(false)
 const confirmingDelete = ref<string | null>(null)
+const organizingSavedName = ref<string | null>(null)
+const organizationFolder = ref('')
+const organizationTags = ref('')
+const savedBusy = ref<string | null>(null)
+
+const savedFolders = computed(() => [...new Set(savedQueries.value
+  .map((query) => query.folder)
+  .filter((folder): folder is string => Boolean(folder)))]
+  .sort((a, b) => a.localeCompare(b)))
+const savedTags = computed(() => [...new Set(savedQueries.value.flatMap((query) => query.tags))]
+  .sort((a, b) => a.localeCompare(b)))
 
 const filteredSaved = computed(() => {
   const needle = savedSearch.value.trim().toLowerCase()
-  if (!needle) return savedQueries.value
-  return savedQueries.value.filter((q) =>
-    q.name.toLowerCase().includes(needle) || q.sql.toLowerCase().includes(needle))
+  return [...savedQueries.value]
+    .filter((query) => !savedFavoritesOnly.value || query.favorite)
+    .filter((query) => !savedFolderFilter.value || query.folder === savedFolderFilter.value)
+    .filter((query) => !savedTagFilter.value || query.tags.includes(savedTagFilter.value))
+    .filter((query) => !needle || [query.name, query.sql, query.folder ?? '', ...query.tags]
+      .some((value) => value.toLowerCase().includes(needle)))
+    .sort((a, b) => Number(b.favorite) - Number(a.favorite)
+      || (a.folder ?? '').localeCompare(b.folder ?? '')
+      || a.name.localeCompare(b.name))
 })
 
 async function loadSaved() {
@@ -140,12 +160,59 @@ async function saveActiveTab() {
   else savedError.value = r.error.message
 }
 
+function replaceSaved(saved: SavedQuery) {
+  savedQueries.value = savedQueries.value.map((query) => query.name === saved.name ? saved : query)
+}
+
+async function organizeSaved(query: SavedQuery, patch: SavedQueryOrganizationPatch): Promise<boolean> {
+  if (savedBusy.value) return false
+  savedBusy.value = query.name
+  try {
+    const response = await savedApi.organize(query.name, patch)
+    if (response.ok) {
+      replaceSaved(response.data)
+      savedError.value = null
+      return true
+    }
+    savedError.value = response.error.message
+    return false
+  } catch (cause) {
+    savedError.value = cause instanceof Error ? cause.message : String(cause)
+    return false
+  } finally {
+    savedBusy.value = null
+  }
+}
+
+async function toggleSavedFavorite(query: SavedQuery) {
+  await organizeSaved(query, { favorite: !query.favorite })
+}
+
+function startOrganizingSaved(query: SavedQuery) {
+  organizingSavedName.value = query.name
+  organizationFolder.value = query.folder ?? ''
+  organizationTags.value = query.tags.join(', ')
+  confirmingDelete.value = null
+}
+
+function cancelOrganizingSaved() {
+  organizingSavedName.value = null
+}
+
+async function saveOrganization(query: SavedQuery) {
+  const tags = organizationTags.value.split(/[,，]/u).map((tag) => tag.trim()).filter(Boolean)
+  if (await organizeSaved(query, { folder: organizationFolder.value, tags })) {
+    organizingSavedName.value = null
+  }
+}
+
 async function removeSaved(name: string) {
   if (confirmingDelete.value !== name) {
     confirmingDelete.value = name
     return
   }
   confirmingDelete.value = null
+  if (organizingSavedName.value === name) cancelOrganizingSaved()
   const r = await savedApi.remove(name)
   if (r.ok) await loadSaved()
   else savedError.value = r.error.message
@@ -273,35 +340,91 @@ function timeLabel(at: number): string {
           v-model="savedSearch"
           class="drawer-search"
           aria-label="搜尋已存查詢"
-          placeholder="搜尋名稱或 SQL"
+          placeholder="搜尋名稱、SQL、資料夾或標籤"
         >
+        <div class="saved-filters">
+          <button
+            type="button"
+            class="ghost"
+            aria-label="只顯示收藏"
+            :aria-pressed="savedFavoritesOnly"
+            @click="savedFavoritesOnly = !savedFavoritesOnly"
+          >★ 收藏</button>
+          <select v-model="savedFolderFilter" aria-label="依資料夾篩選">
+            <option value="">所有資料夾</option>
+            <option v-for="folder in savedFolders" :key="folder" :value="folder">{{ folder }}</option>
+          </select>
+          <select v-model="savedTagFilter" aria-label="依標籤篩選">
+            <option value="">所有標籤</option>
+            <option v-for="tag in savedTags" :key="tag" :value="tag">{{ tag }}</option>
+          </select>
+        </div>
         <p v-if="savedError" role="alert">{{ savedError }}</p>
         <p v-if="!filteredSaved.length" class="drawer-empty">沒有已存查詢。</p>
         <div v-for="q in filteredSaved" :key="q.name" class="saved-item">
-          <button
-            type="button"
-            class="entry"
-            data-testid="saved-entry"
-            @click="openInNewTab(q.sql, q.name)"
+          <div class="saved-row">
+            <button
+              type="button"
+              class="favorite"
+              :class="{ active: q.favorite }"
+              :aria-label="q.favorite ? `取消收藏 ${q.name}` : `收藏 ${q.name}`"
+              :aria-pressed="q.favorite"
+              :disabled="savedBusy === q.name"
+              @click="toggleSavedFavorite(q)"
+            >★</button>
+            <button
+              type="button"
+              class="entry"
+              data-testid="saved-entry"
+              @click="openInNewTab(q.sql, q.name)"
+            >
+              <span class="entry-meta">{{ q.name }}</span>
+              <span v-if="q.folder || q.tags.length" class="saved-meta">
+                <span v-if="q.folder">{{ q.folder }}</span>
+                <i v-for="tag in q.tags" :key="tag">#{{ tag }}</i>
+              </span>
+              <code class="entry-sql">{{ q.sql }}</code>
+            </button>
+            <div class="saved-actions">
+              <button type="button" class="ghost" :aria-label="`整理 ${q.name}`" @click="startOrganizingSaved(q)">整理</button>
+              <button
+                v-if="confirmingDelete === q.name"
+                type="button"
+                class="confirm-delete"
+                :aria-label="`確認刪除 ${q.name}`"
+                @click="removeSaved(q.name)"
+              >確認刪除</button>
+              <button
+                v-else
+                type="button"
+                class="ghost"
+                :aria-label="`刪除 ${q.name}`"
+                @click="removeSaved(q.name)"
+              >刪除</button>
+            </div>
+          </div>
+          <form
+            v-if="organizingSavedName === q.name"
+            class="organization-editor"
+            @submit.prevent="saveOrganization(q)"
           >
-            <span class="entry-meta">{{ q.name }}</span>
-            <code class="entry-sql">{{ q.sql }}</code>
-          </button>
-          <button
-            v-if="confirmingDelete === q.name"
-            type="button"
-            class="confirm-delete"
-            :aria-label="`確認刪除 ${q.name}`"
-            @click="removeSaved(q.name)"
-          >確認刪除</button>
-          <button
-            v-else
-            type="button"
-            class="ghost"
-            :aria-label="`刪除 ${q.name}`"
-            @click="removeSaved(q.name)"
-          >刪除</button>
+            <label>
+              資料夾
+              <input v-model="organizationFolder" :aria-label="`資料夾 ${q.name}`" maxlength="100" list="saved-folders">
+            </label>
+            <label>
+              標籤
+              <input v-model="organizationTags" :aria-label="`標籤 ${q.name}`" placeholder="以逗號分隔">
+            </label>
+            <div class="organization-actions">
+              <button type="button" class="ghost" @click="cancelOrganizingSaved">取消</button>
+              <button type="submit" :disabled="savedBusy === q.name">儲存整理</button>
+            </div>
+          </form>
         </div>
+        <datalist id="saved-folders">
+          <option v-for="folder in savedFolders" :key="folder" :value="folder" />
+        </datalist>
       </aside>
     </div>
   </div>
@@ -377,7 +500,7 @@ function timeLabel(at: number): string {
 .editor-pane { flex: 1; min-width: 0; }
 .drawer {
   display: flex;
-  flex: 0 0 280px;
+  flex: 0 0 360px;
   flex-direction: column;
   gap: 8px;
   max-height: 420px;
@@ -391,6 +514,9 @@ function timeLabel(at: number): string {
 .drawer-title { color: var(--glass); font: 11px var(--font-data); text-transform: uppercase; }
 .drawer-empty { margin: 0; color: var(--muted); font-size: 12px; }
 .drawer-search { width: 100%; }
+.saved-filters { display: grid; grid-template-columns: auto 1fr 1fr; gap: 5px; }
+.saved-filters button[aria-pressed="true"] { border-color: var(--brass); color: var(--brass); }
+.saved-filters select { min-width: 0; padding: 5px; }
 
 .entry {
   display: flex;
@@ -429,6 +555,20 @@ function timeLabel(at: number): string {
 .dot.cancel { background: var(--brass); }
 .dot.fail { background: var(--danger); }
 
-.saved-item { display: flex; align-items: stretch; gap: 4px; }
+.saved-item { display: flex; flex-direction: column; gap: 5px; }
+.saved-row { display: flex; align-items: stretch; gap: 4px; }
+.favorite { padding: 4px 7px; color: var(--muted); }
+.favorite.active { border-color: var(--brass); color: var(--brass); }
+.saved-actions { display: flex; flex-direction: column; gap: 4px; }
+.saved-meta { display: flex; flex-wrap: wrap; gap: 5px; color: var(--glass); font: 10px var(--font-data); }
+.saved-meta i { color: var(--brass); font-style: normal; }
+.organization-editor { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); }
+.organization-editor label { display: grid; gap: 3px; color: var(--muted); font-size: 11px; }
+.organization-actions { display: flex; justify-content: flex-end; gap: 5px; }
 .confirm-delete { color: var(--danger); border-color: var(--danger); }
+
+@media (max-width: 900px) {
+  .workspace-body { flex-direction: column; }
+  .drawer { width: 100%; flex-basis: auto; }
+}
 </style>

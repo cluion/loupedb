@@ -123,6 +123,13 @@ describe('useSavedQueries', () => {
     })
   })
 
+  it('organize patches favorite, folder or tags by encoded name', async () => {
+    await useSavedQueries().organize('daily report', { favorite: true, folder: 'Reports', tags: ['daily'] })
+    expect(fetchMock).toHaveBeenCalledWith('/api/saved-queries/daily%20report', {
+      method: 'PATCH', body: { favorite: true, folder: 'Reports', tags: ['daily'] },
+    })
+  })
+
   it('remove deletes with encoded name', async () => {
     await useSavedQueries().remove('my query')
     expect(fetchMock).toHaveBeenCalledWith('/api/saved-queries/my%20query', { method: 'DELETE' })

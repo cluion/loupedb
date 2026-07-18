@@ -79,14 +79,19 @@ const SqlEditorStub = {
   template: `<textarea aria-label="SQL draft" :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
 }
 
-const { listMock, saveMock, removeMock } = vi.hoisted(() => ({
+const { listMock, saveMock, organizeMock, removeMock } = vi.hoisted(() => ({
   listMock: vi.fn(async () => ({ ok: true as const, data: [] as unknown[] })),
   saveMock: vi.fn(async () => ({ ok: true as const, data: {} })),
+  organizeMock: vi.fn(),
   removeMock: vi.fn(async () => ({ ok: true as const, data: { deleted: true } })),
 }))
-mockNuxtImport('useSavedQueries', () => () => ({ list: listMock, save: saveMock, remove: removeMock }))
+mockNuxtImport('useSavedQueries', () => () => ({
+  list: listMock, save: saveMock, organize: organizeMock, remove: removeMock,
+}))
 
-const savedDaily = { name: 'daily', sql: 'select 9 as nine;', createdAt: 1, updatedAt: 2 }
+const savedDaily = {
+  name: 'daily', sql: 'select 9 as nine;', favorite: false, folder: null, tags: [], createdAt: 1, updatedAt: 2,
+}
 
 async function mountWorkspace(workspaceId: string, historyLabel: string) {
   return await mountSuspended(SqlWorkspace, {
@@ -194,6 +199,9 @@ describe('SqlWorkspace saved queries drawer', () => {
   beforeEach(() => {
     listMock.mockClear()
     saveMock.mockClear()
+    organizeMock.mockReset().mockImplementation(async (name: string, patch: Record<string, unknown>) => ({
+      ok: true, data: { ...savedDaily, name, ...patch, updatedAt: 3 },
+    }))
     removeMock.mockClear()
     listMock.mockResolvedValue({ ok: true, data: [savedDaily] })
   })
@@ -220,7 +228,13 @@ describe('SqlWorkspace saved queries drawer', () => {
   it('filters saved queries by the search box', async () => {
     listMock.mockResolvedValue({
       ok: true,
-      data: [savedDaily, { name: 'weekly rollup', sql: 'select 2;', createdAt: 1, updatedAt: 1 }],
+      data: [
+        savedDaily,
+        {
+          name: 'weekly rollup', sql: 'select 2;', favorite: false,
+          folder: 'Reports', tags: ['weekly'], createdAt: 1, updatedAt: 1,
+        },
+      ],
     })
     const w = await mountWorkspace('ws-saved-search', 'saved-search')
     await w.get('[aria-label="已存查詢"]').trigger('click')
@@ -228,6 +242,46 @@ describe('SqlWorkspace saved queries drawer', () => {
     await w.get('[aria-label="搜尋已存查詢"]').setValue('daily')
     expect(w.text()).toContain('daily')
     expect(w.text()).not.toContain('weekly rollup')
+  })
+
+  it('favorites and organizes a saved query', async () => {
+    const w = await mountWorkspace('ws-saved-organize', 'saved-organize')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('daily'))
+
+    await w.get('[aria-label="收藏 daily"]').trigger('click')
+    await vi.waitFor(() => expect(organizeMock).toHaveBeenCalledWith('daily', { favorite: true }))
+
+    await w.get('[aria-label="整理 daily"]').trigger('click')
+    await w.get('[aria-label="資料夾 daily"]').setValue('Reports')
+    await w.get('[aria-label="標籤 daily"]').setValue('daily, audit, daily')
+    await w.get('.organization-editor').trigger('submit')
+    await vi.waitFor(() => expect(organizeMock).toHaveBeenLastCalledWith('daily', {
+      folder: 'Reports', tags: ['daily', 'audit', 'daily'],
+    }))
+  })
+
+  it('filters saved queries by favorite, folder and tag', async () => {
+    listMock.mockResolvedValue({
+      ok: true,
+      data: [
+        savedDaily,
+        {
+          name: 'weekly rollup', sql: 'select 2;', favorite: true,
+          folder: 'Reports', tags: ['weekly'], createdAt: 1, updatedAt: 1,
+        },
+      ],
+    })
+    const w = await mountWorkspace('ws-saved-filters', 'saved-filters')
+    await w.get('[aria-label="已存查詢"]').trigger('click')
+    await vi.waitFor(() => expect(w.text()).toContain('weekly rollup'))
+
+    await w.get('[aria-label="只顯示收藏"]').trigger('click')
+    expect(w.text()).toContain('weekly rollup')
+    expect(w.text()).not.toContain('daily')
+    await w.get('[aria-label="依資料夾篩選"]').setValue('Reports')
+    await w.get('[aria-label="依標籤篩選"]').setValue('weekly')
+    expect(w.text()).toContain('weekly rollup')
   })
 
   it('deletes a saved query only after a second confirming click', async () => {

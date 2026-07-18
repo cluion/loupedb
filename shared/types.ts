@@ -120,8 +120,17 @@ export interface DatabaseError {
 export interface SavedQuery {
   readonly name: string // unique key - saving under an existing name overwrites
   readonly sql: string
+  readonly favorite: boolean
+  readonly folder: string | null
+  readonly tags: ReadonlyArray<string>
   readonly createdAt: number
   readonly updatedAt: number
+}
+
+export interface SavedQueryOrganizationPatch {
+  readonly favorite?: boolean
+  readonly folder?: string | null
+  readonly tags?: ReadonlyArray<string>
 }
 
 // unified API response envelope, shared by server routes and frontend composables
