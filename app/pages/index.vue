@@ -118,6 +118,8 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           <DataGrid
             :key="`${selected.connId}.${selected.schema}.${selected.table}`"
             :connection-id="selected.connId" :schema="selected.schema" :table="selected.table"
+            :database="selected.database"
+            :history-label="currentConnectionName ?? currentConnectionId"
             :safety-mode="currentConnectionSafetyMode"
             @dirty-state="hasStagedChanges = $event"
           />

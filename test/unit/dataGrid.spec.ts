@@ -125,6 +125,52 @@ describe('DataGrid', () => {
     }))
   })
 
+  it('builds multiple OR filters and supports valueless NULL operators', async () => {
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, database: 'appdb', historyLabel: 'multi-filter' },
+    })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.find('select[aria-label="filter column"]').setValue('label')
+    await w.find('select[aria-label="filter op"]').setValue('ilike')
+    await w.find('input[aria-label="filter value"]').setValue('%a%')
+    await w.findAll('button').find(button => button.text().includes('新增條件'))!.trigger('click')
+    await w.find('select[aria-label="filter column 2"]').setValue('id')
+    await w.find('select[aria-label="filter op 2"]').setValue('is not null')
+    await w.find('select[aria-label="filter combinator"]').setValue('or')
+    expect(w.find('input[aria-label="filter value 2"]').exists()).toBe(false)
+    await w.find('form').trigger('submit')
+
+    expect(browseMock).toHaveBeenLastCalledWith('public', 'items', expect.objectContaining({
+      offset: 0,
+      filterCombinator: 'or',
+      filter: [
+        { column: 'label', op: 'ilike', value: '%a%' },
+        { column: 'id', op: 'is not null' },
+      ],
+    }))
+    expect(w.get('[data-testid="active-filter"]').text()).toContain('label ILIKE "%a%" OR id IS NOT NULL')
+  })
+
+  it('records applied filters and reapplies them from history', async () => {
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, database: 'appdb', historyLabel: 'history-replay' },
+    })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.find('select[aria-label="filter column"]').setValue('label')
+    await w.find('select[aria-label="filter op"]').setValue('like')
+    await w.find('input[aria-label="filter value"]').setValue('a%')
+    await w.find('form').trigger('submit')
+    expect(w.text()).toContain('最近篩選・1')
+
+    await w.findAll('button').find(button => button.text() === '清除')!.trigger('click')
+    expect(browseMock).toHaveBeenLastCalledWith('public', 'items', expect.objectContaining({ filter: undefined }))
+    await w.get('[aria-label="套用篩選歷史 1"]').trigger('click')
+    expect(browseMock).toHaveBeenLastCalledWith('public', 'items', expect.objectContaining({
+      filterCombinator: 'and',
+      filter: [{ column: 'label', op: 'like', value: 'a%' }],
+    }))
+  })
+
   it('stages and atomically applies one parameterized cell update by primary key', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))

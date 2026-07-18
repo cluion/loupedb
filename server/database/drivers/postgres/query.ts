@@ -1,5 +1,6 @@
 import type postgres from 'postgres'
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
+import type { BrowseFilterCondition, BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
+import { BROWSE_FILTER_OPERATORS, MAX_BROWSE_FILTERS, VALUELESS_BROWSE_FILTER_OPERATORS } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 import { listUniqueKeys } from './schema'
 
@@ -184,12 +185,21 @@ export async function browseTable(
 
   // ops are interpolated into SQL - runtime whitelist required because BrowseOpts
   // arrives from API request bodies where TS types do not hold
-  const ALLOWED_OPS: ReadonlySet<string> = new Set(['=', '!=', '>', '<', 'like'])
+  const ALLOWED_OPS: ReadonlySet<string> = new Set(BROWSE_FILTER_OPERATORS)
+  const VALUELESS_OPS: ReadonlySet<string> = new Set(VALUELESS_BROWSE_FILTER_OPERATORS)
 
   const where: string[] = []
   const params: unknown[] = []
-  for (const f of opts.filter ?? []) {
+  const requestedFilters: ReadonlyArray<unknown> = Array.isArray(opts.filter) ? opts.filter : []
+  for (const candidate of requestedFilters.slice(0, MAX_BROWSE_FILTERS)) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const f = candidate as Partial<BrowseFilterCondition>
+    if (typeof f.column !== 'string' || typeof f.op !== 'string') continue
     if (!validCols.has(f.column)) continue // whitelist: unknown columns dropped
+    if (VALUELESS_OPS.has(f.op)) {
+      where.push(`${quoteIdent(f.column)} ${f.op}`)
+      continue
+    }
     if (!ALLOWED_OPS.has(f.op)) continue // whitelist: unknown operators dropped
     where.push(`${quoteIdent(f.column)} ${f.op} $${params.length + 1}`)
     params.push(f.value)
@@ -200,7 +210,8 @@ export async function browseTable(
     orderClause = ` order by ${quoteIdent(opts.orderBy)} ${opts.orderDir === 'desc' ? 'desc' : 'asc'}`
   }
 
-  const whereClause = where.length ? ` where ${where.join(' and ')}` : ''
+  const filterCombinator = opts.filterCombinator === 'or' ? ' or ' : ' and '
+  const whereClause = where.length ? ` where (${where.join(filterCombinator)})` : ''
   let versionColumn = '__loupedb_xmin'
   while (validCols.has(versionColumn)) versionColumn += '_'
   const text = `select *, xmin::text as ${quoteIdent(versionColumn)}`

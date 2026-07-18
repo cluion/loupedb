@@ -363,6 +363,42 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('browse combines multiple parameterized filters with AND or OR', async () => {
+    const driver = await setup()
+    const andResult = await driver.browse('public', 'items', {
+      limit: 10, offset: 0, filterCombinator: 'and',
+      filter: [
+        { column: 'qty', op: '>=', value: 2 },
+        { column: 'label', op: 'not like', value: 'c%' },
+      ],
+    })
+    expect(andResult.rows.map(row => row.label)).toEqual(['b'])
+
+    const orResult = await driver.browse('public', 'items', {
+      limit: 10, offset: 0, filterCombinator: 'or',
+      filter: [
+        { column: 'label', op: 'ilike', value: 'A' },
+        { column: 'qty', op: '>=', value: 3 },
+      ],
+    })
+    expect(orResult.rows.map(row => row.label)).toEqual(['a', 'c'])
+    await driver.disconnect()
+  })
+
+  it('browse supports IS NULL and IS NOT NULL without bind values', async () => {
+    const driver = await setup()
+    await driver.execute("insert into items (label, qty) values ('no qty', null)")
+    const nullRows = await driver.browse('public', 'items', {
+      limit: 10, offset: 0, filter: [{ column: 'qty', op: 'is null' }],
+    })
+    expect(nullRows.rows.map(row => row.label)).toEqual(['no qty'])
+    const valuedRows = await driver.browse('public', 'items', {
+      limit: 10, offset: 0, filter: [{ column: 'qty', op: 'is not null' }],
+    })
+    expect(valuedRows.rows).toHaveLength(3)
+    await driver.disconnect()
+  })
+
   it('browse ignores non-whitelisted filter operator (runtime injection guard)', async () => {
     const driver = await setup()
     const r = await driver.browse('public', 'items', {

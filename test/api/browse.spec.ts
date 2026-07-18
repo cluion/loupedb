@@ -68,6 +68,24 @@ describe('browse API', async () => {
     if (r.ok) expect(r.data.rows).toHaveLength(2)
   })
 
+  it('POST /browse applies multiple OR filters', async () => {
+    const r = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: {
+        schema: 'public', table: 'items',
+        opts: {
+          limit: 10, offset: 0, filterCombinator: 'or',
+          filter: [
+            { column: 'label', op: '=', value: 'a' },
+            { column: 'qty', op: '>=', value: 3 },
+          ],
+        },
+      },
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.data.rows.map(row => row.label)).toEqual(['a', 'c'])
+  })
+
   it('PATCH /cell updates exactly one row and rejects stale writes', async () => {
     const updated = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
       `/api/connections/${connId}/tables/public/items/cell`,

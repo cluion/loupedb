@@ -47,6 +47,27 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // data grid renders the table content end to end
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
 
+  // multiple filters can be combined and replayed from per-table browser history
+  const filterBuilder = page.getByRole('region', { name: '多條件篩選' })
+  await filterBuilder.getByLabel('filter column').selectOption('label')
+  await filterBuilder.getByLabel('filter op').selectOption('ilike')
+  await filterBuilder.getByLabel('filter value').fill('%')
+  await filterBuilder.getByRole('button', { name: /新增條件/ }).click()
+  await filterBuilder.getByLabel('filter column 2').selectOption('id')
+  await filterBuilder.getByLabel('filter op 2').selectOption('>')
+  await filterBuilder.getByLabel('filter value 2').fill('1')
+  await filterBuilder.getByRole('button', { name: '套用篩選' }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).not.toBeVisible()
+  await expect(page.getByRole('cell', { name: 'y', exact: true })).toBeVisible()
+  await expect(page.getByTestId('active-filter')).toContainText('label ILIKE "%" AND id > "1"')
+  await filterBuilder.getByRole('button', { name: '清除', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+  await filterBuilder.getByText('最近篩選・1').click()
+  await filterBuilder.getByRole('button', { name: '套用篩選歷史 1' }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).not.toBeVisible()
+  await filterBuilder.getByRole('button', { name: '清除', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+
   // edits stay local with a dirty marker until the atomic batch is applied
   await expect(page.getByTestId('editability-status')).toContainText('可編輯')
   await page.getByRole('cell', { name: 'x', exact: true }).dblclick()

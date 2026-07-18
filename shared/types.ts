@@ -121,12 +121,31 @@ export interface TableSchema {
   readonly foreignKeys: ReadonlyArray<ForeignKeyInfo>
 }
 
+export const BROWSE_FILTER_OPERATORS = [
+  '=', '!=', '>', '>=', '<', '<=',
+  'like', 'not like', 'ilike',
+  'is null', 'is not null',
+] as const
+export const VALUELESS_BROWSE_FILTER_OPERATORS = ['is null', 'is not null'] as const
+export const BROWSE_FILTER_COMBINATORS = ['and', 'or'] as const
+export const MAX_BROWSE_FILTERS = 20
+
+export type BrowseFilterOperator = typeof BROWSE_FILTER_OPERATORS[number]
+export type BrowseFilterCombinator = typeof BROWSE_FILTER_COMBINATORS[number]
+
+export interface BrowseFilterCondition {
+  readonly column: string
+  readonly op: BrowseFilterOperator
+  readonly value?: unknown
+}
+
 export interface BrowseOpts {
   readonly limit: number
   readonly offset: number
   readonly orderBy?: string
   readonly orderDir?: 'asc' | 'desc'
-  readonly filter?: ReadonlyArray<{ readonly column: string; readonly op: '=' | '!=' | '>' | '<' | 'like'; readonly value: unknown }>
+  readonly filter?: ReadonlyArray<BrowseFilterCondition>
+  readonly filterCombinator?: BrowseFilterCombinator
 }
 
 export interface CellUpdateInput {

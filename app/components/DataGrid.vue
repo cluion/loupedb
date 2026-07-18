@@ -1,12 +1,32 @@
 <script setup lang="ts">
-import type { BrowseOpts, CellUpdateInput, ColumnInfo, ConnectionSafetyMode, NormalizedType, QueryResult, RowDeleteInput, RowInsertInput, TableChange, TableSchema } from '#shared/types'
+import {
+  BROWSE_FILTER_OPERATORS,
+  MAX_BROWSE_FILTERS,
+  VALUELESS_BROWSE_FILTER_OPERATORS,
+  type BrowseFilterCombinator,
+  type BrowseFilterCondition,
+  type BrowseFilterOperator,
+  type BrowseOpts,
+  type CellUpdateInput,
+  type ColumnInfo,
+  type ConnectionSafetyMode,
+  type NormalizedType,
+  type QueryResult,
+  type RowDeleteInput,
+  type RowInsertInput,
+  type TableChange,
+  type TableSchema,
+} from '#shared/types'
+import { useTableFilterHistory, type TableFilterHistoryEntry } from '../stores/tableFilterHistory'
 
 const props = withDefaults(defineProps<{
   connectionId: string
   schema: string
   table: string
+  database?: string
+  historyLabel?: string
   safetyMode?: ConnectionSafetyMode
-}>(), { safetyMode: 'normal' })
+}>(), { database: '', historyLabel: '', safetyMode: 'normal' })
 const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
 const { applyTableChanges, browse } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
@@ -27,10 +47,43 @@ const limit = ref(50)
 const offset = ref(0)
 const orderBy = ref<string | undefined>(undefined)
 const orderDir = ref<'asc' | 'desc'>('asc')
-// minimal single-condition filter - multi-condition is a future extension
-const filterColumn = ref('')
-const filterOp = ref<'=' | '!=' | '>' | '<' | 'like'>('=')
-const filterValue = ref('')
+
+interface FilterDraftCondition {
+  readonly id: number
+  column: string
+  op: BrowseFilterOperator
+  value: string
+}
+
+const FILTER_OPERATOR_LABELS: Readonly<Record<BrowseFilterOperator, string>> = {
+  '=': '=',
+  '!=': '!=',
+  '>': '>',
+  '>=': '>=',
+  '<': '<',
+  '<=': '<=',
+  'like': 'LIKE',
+  'not like': 'NOT LIKE',
+  'ilike': 'ILIKE',
+  'is null': 'IS NULL',
+  'is not null': 'IS NOT NULL',
+}
+const valuelessFilterOperators: ReadonlySet<BrowseFilterOperator> = new Set(VALUELESS_BROWSE_FILTER_OPERATORS)
+let nextFilterConditionId = 1
+const createFilterCondition = (): FilterDraftCondition => ({
+  id: nextFilterConditionId++, column: '', op: '=', value: '',
+})
+const filterCombinator = ref<BrowseFilterCombinator>('and')
+const filterConditions = ref<FilterDraftCondition[]>([createFilterCondition()])
+const appliedFilters = ref<ReadonlyArray<BrowseFilterCondition>>([])
+const appliedFilterCombinator = ref<BrowseFilterCombinator>('and')
+const filterHistoryScope = [
+  props.historyLabel || props.connectionId,
+  props.database,
+  props.schema,
+  props.table,
+].join('\u001f')
+const filterHistory = useTableFilterHistory(filterHistoryScope)
 
 interface CellEditorState {
   readonly rowIndex: number
@@ -122,13 +175,12 @@ onUnmounted(() => emit('dirty-state', false))
 async function load() {
   error.value = null
   loading.value = true
-  const filter: BrowseOpts['filter'] = filterColumn.value
-    ? [{ column: filterColumn.value, op: filterOp.value, value: filterValue.value }]
-    : undefined
+  const filter: BrowseOpts['filter'] = appliedFilters.value.length ? appliedFilters.value : undefined
   try {
     const r = await browse(props.schema, props.table, {
       limit: limit.value, offset: offset.value,
       orderBy: orderBy.value, orderDir: orderDir.value, filter,
+      filterCombinator: filter ? appliedFilterCombinator.value : undefined,
     })
     if (r.ok) result.value = r.data
     else error.value = r.error.message
@@ -174,10 +226,91 @@ function sort(col: string) {
   load()
 }
 
+function filterNeedsValue(op: BrowseFilterOperator): boolean {
+  return !valuelessFilterOperators.has(op)
+}
+
+function addFilterCondition() {
+  if (stagedCount.value || filterConditions.value.length >= MAX_BROWSE_FILTERS) return
+  filterConditions.value.push(createFilterCondition())
+}
+
+function removeFilterCondition(id: number) {
+  if (stagedCount.value) return
+  if (filterConditions.value.length === 1) {
+    filterConditions.value = [createFilterCondition()]
+    return
+  }
+  filterConditions.value = filterConditions.value.filter((condition) => condition.id !== id)
+}
+
+function draftToFilters(): ReadonlyArray<BrowseFilterCondition> {
+  return filterConditions.value
+    .filter((condition) => condition.column)
+    .map((condition) => filterNeedsValue(condition.op)
+      ? { column: condition.column, op: condition.op, value: condition.value }
+      : { column: condition.column, op: condition.op })
+}
+
+function setAppliedFilters(filters: ReadonlyArray<BrowseFilterCondition>, combinator: BrowseFilterCombinator) {
+  appliedFilters.value = filters.map((filter) => ({ ...filter }))
+  appliedFilterCombinator.value = combinator
+}
+
 function applyFilter() {
   if (stagedCount.value) return
+  const filters = draftToFilters()
+  setAppliedFilters(filters, filterCombinator.value)
+  if (filters.length) filterHistory.add({ filters, combinator: filterCombinator.value })
   offset.value = 0
   load()
+}
+
+function clearFilter() {
+  if (stagedCount.value) return
+  filterCombinator.value = 'and'
+  filterConditions.value = [createFilterCondition()]
+  setAppliedFilters([], 'and')
+  offset.value = 0
+  load()
+}
+
+function restoreFilter(entry: TableFilterHistoryEntry) {
+  if (stagedCount.value || loading.value) return
+  const availableColumns = new Set(result.value?.columns.map((column) => column.name) ?? [])
+  if (entry.filters.some((filter) => !availableColumns.has(filter.column))) {
+    notice.value = '此篩選歷史包含已不存在的欄位，未予套用'
+    return
+  }
+  filterCombinator.value = entry.combinator
+  filterConditions.value = entry.filters.map((filter) => ({
+    id: nextFilterConditionId++,
+    column: filter.column,
+    op: filter.op,
+    value: filter.value === undefined || filter.value === null ? '' : String(filter.value),
+  }))
+  setAppliedFilters(entry.filters, entry.combinator)
+  filterHistory.add({ filters: entry.filters, combinator: entry.combinator })
+  offset.value = 0
+  load()
+}
+
+function filterSummary(
+  filters: ReadonlyArray<BrowseFilterCondition>, combinator: BrowseFilterCombinator,
+): string {
+  const joiner = combinator === 'and' ? ' AND ' : ' OR '
+  return filters.map((filter) => {
+    const operator = FILTER_OPERATOR_LABELS[filter.op]
+    return filterNeedsValue(filter.op)
+      ? `${filter.column} ${operator} ${JSON.stringify(filter.value ?? '')}`
+      : `${filter.column} ${operator}`
+  }).join(joiner)
+}
+
+function filterTimeLabel(at: number): string {
+  return new Date(at).toLocaleString('zh-TW', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
 }
 
 function prevPage() {
@@ -538,22 +671,97 @@ async function applyAll() {
     </p>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="writeError" class="write-error" role="alert">{{ writeError }}</p>
-    <form class="toolbar" @submit.prevent="applyFilter">
-      <select v-model="filterColumn" aria-label="filter column" :disabled="stagedCount > 0">
-        <option value="">(不篩選)</option>
-        <option v-for="c in result?.columns ?? []" :key="c.name" :value="c.name">{{ c.name }}</option>
-      </select>
-      <select v-model="filterOp" aria-label="filter op" :disabled="stagedCount > 0">
-        <option>=</option>
-        <option>!=</option>
-        <option>&gt;</option>
-        <option>&lt;</option>
-        <option>like</option>
-      </select>
-      <input v-model="filterValue" placeholder="值" :disabled="stagedCount > 0">
-      <button type="submit" :disabled="stagedCount > 0">套用</button>
-      <button type="button" :disabled="!tableInfo || saving || isConnectionReadOnly" @click="startInsert()">新增資料列</button>
-    </form>
+    <section class="filter-builder" aria-label="多條件篩選">
+      <form @submit.prevent="applyFilter">
+        <div class="filter-head">
+          <strong>篩選</strong>
+          <label>
+            <span>條件關係</span>
+            <select v-model="filterCombinator" aria-label="filter combinator" :disabled="stagedCount > 0">
+              <option value="and">全部符合 AND</option>
+              <option value="or">任一符合 OR</option>
+            </select>
+          </label>
+        </div>
+        <div class="filter-conditions">
+          <div
+            v-for="(condition, index) in filterConditions"
+            :key="condition.id"
+            class="filter-condition"
+            data-testid="filter-condition"
+          >
+            <span class="condition-number">{{ index + 1 }}</span>
+            <select
+              v-model="condition.column"
+              :aria-label="index === 0 ? 'filter column' : `filter column ${index + 1}`"
+              :disabled="stagedCount > 0"
+            >
+              <option value="">選擇欄位</option>
+              <option v-for="c in result?.columns ?? []" :key="c.name" :value="c.name">{{ c.name }}</option>
+            </select>
+            <select
+              v-model="condition.op"
+              :aria-label="index === 0 ? 'filter op' : `filter op ${index + 1}`"
+              :disabled="stagedCount > 0"
+            >
+              <option v-for="op in BROWSE_FILTER_OPERATORS" :key="op" :value="op">
+                {{ FILTER_OPERATOR_LABELS[op] }}
+              </option>
+            </select>
+            <input
+              v-if="filterNeedsValue(condition.op)"
+              v-model="condition.value"
+              :aria-label="index === 0 ? 'filter value' : `filter value ${index + 1}`"
+              placeholder="值"
+              :disabled="stagedCount > 0"
+            >
+            <span v-else class="no-filter-value">不需輸入值</span>
+            <button
+              type="button"
+              class="ghost remove-filter"
+              :aria-label="`移除篩選條件 ${index + 1}`"
+              :disabled="stagedCount > 0"
+              @click="removeFilterCondition(condition.id)"
+            >×</button>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button
+            type="button" class="ghost"
+            :disabled="stagedCount > 0 || filterConditions.length >= MAX_BROWSE_FILTERS"
+            @click="addFilterCondition"
+          >＋ 新增條件</button>
+          <button type="button" class="ghost" :disabled="stagedCount > 0" @click="clearFilter">清除</button>
+          <button type="submit" :disabled="stagedCount > 0">套用篩選</button>
+          <button type="button" :disabled="!tableInfo || saving || isConnectionReadOnly" @click="startInsert()">新增資料列</button>
+        </div>
+      </form>
+      <p v-if="appliedFilters.length" class="active-filter" data-testid="active-filter">
+        已套用：{{ filterSummary(appliedFilters, appliedFilterCombinator) }}
+      </p>
+      <details v-if="filterHistory.entries.value.length" class="filter-history">
+        <summary>最近篩選・{{ filterHistory.entries.value.length }}</summary>
+        <ul>
+          <li v-for="(entry, index) in filterHistory.entries.value" :key="entry.id">
+            <button
+              type="button"
+              class="ghost history-filter"
+              :aria-label="`套用篩選歷史 ${index + 1}`"
+              :disabled="loading || stagedCount > 0"
+              @click="restoreFilter(entry)"
+            >{{ filterSummary(entry.filters, entry.combinator) }}</button>
+            <time :datetime="new Date(entry.at).toISOString()">{{ filterTimeLabel(entry.at) }}</time>
+            <button
+              type="button"
+              class="ghost remove-filter"
+              :aria-label="`刪除篩選歷史 ${index + 1}`"
+              @click="filterHistory.remove(entry.id)"
+            >×</button>
+          </li>
+        </ul>
+        <button type="button" class="ghost clear-filter-history" @click="filterHistory.clear">清除篩選歷史</button>
+      </details>
+    </section>
     <div v-if="loading && !result" class="loading">載入中…</div>
     <div class="scroll">
       <table v-if="result">
@@ -765,8 +973,26 @@ async function applyAll() {
 .editability { color: var(--muted); }
 .notice { color: #86b98d; }
 .write-error { color: var(--danger); }
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
-.toolbar input { flex: 1; min-width: 80px; }
+.filter-builder { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.filter-builder form { display: grid; gap: 8px; }
+.filter-head, .filter-head label, .filter-actions { display: flex; align-items: center; gap: 8px; }
+.filter-head { justify-content: space-between; }
+.filter-head label span { color: var(--muted); font-size: 11px; }
+.filter-conditions { display: grid; gap: 6px; }
+.filter-condition { display: grid; grid-template-columns: 22px minmax(120px, 1fr) 110px minmax(100px, 1fr) 30px; align-items: center; gap: 6px; }
+.filter-condition select, .filter-condition input { min-width: 0; width: 100%; }
+.condition-number { color: var(--muted); font: 11px var(--font-data); text-align: center; }
+.no-filter-value { color: var(--muted); font-size: 11px; }
+.filter-actions { flex-wrap: wrap; }
+.filter-actions button:nth-last-child(2) { margin-left: auto; }
+.active-filter { margin: 0; color: var(--glass); font: 11px var(--font-data); overflow-wrap: anywhere; }
+.filter-history summary { color: var(--muted); cursor: pointer; font-size: 12px; }
+.filter-history ul { display: grid; gap: 5px; margin: 7px 0; padding: 0; list-style: none; }
+.filter-history li { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px; align-items: center; gap: 6px; }
+.history-filter { min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.filter-history time { color: var(--muted); font: 10px var(--font-data); }
+.remove-filter { padding-inline: 7px; color: var(--muted); }
+.clear-filter-history { font-size: 11px; }
 
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table {
@@ -841,6 +1067,11 @@ tbody tr:last-child td { border-bottom: none; }
 .meta { margin-left: auto; font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 
 @media (max-width: 720px) {
+  .filter-condition { grid-template-columns: 22px minmax(0, 1fr) 96px 30px; }
+  .filter-condition input, .no-filter-value { grid-column: 2 / 4; }
+  .filter-actions button:nth-last-child(2) { margin-left: 0; }
+  .filter-history li { grid-template-columns: minmax(0, 1fr) 30px; }
+  .filter-history time { display: none; }
   .insert-field { grid-template-columns: 1fr; }
 }
 </style>

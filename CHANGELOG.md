@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **多條件 Filter Builder**：DataGrid 可新增多個條件並選擇全部符合 `AND` 或任一符合 `OR`，支援比較、`LIKE`／`ILIKE` 與 `IS NULL`／`IS NOT NULL` 等參數化運算子；最近 10 組篩選依連線名稱、資料庫與資料表保存在瀏覽器，可一鍵重新套用或清除
+
 ## [0.15.0] - 2026-07-18
 
 ### Added
