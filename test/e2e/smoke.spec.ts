@@ -19,6 +19,8 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
 
   // connected: main workspace appears
   await expect(page.getByRole('button', { name: '執行' })).toBeVisible()
+  await expect(page.locator('header.bar')).toContainText('DEVELOPMENT')
+  await expect(page.locator('header.bar')).toContainText('NORMAL')
 
   // schema-aware autocomplete: typing a partial table name suggests it
   await columnsLoaded

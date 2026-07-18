@@ -66,6 +66,9 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'error' | 'closed'
 
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full'
 
+export type ConnectionEnvironment = 'development' | 'staging' | 'production'
+export type ConnectionSafetyMode = 'normal' | 'safe' | 'read-only'
+
 export interface ConnectionConfig {
   readonly name: string
   readonly driver: 'postgres'
@@ -75,6 +78,15 @@ export interface ConnectionConfig {
   readonly username: string
   readonly password: string // memory only, never written to disk in plaintext
   readonly ssl: SslMode
+  readonly environment: ConnectionEnvironment
+  readonly safetyMode: ConnectionSafetyMode
+}
+
+export interface ConnectionSessionInfo {
+  readonly id: string
+  readonly name: string
+  readonly environment: ConnectionEnvironment
+  readonly safetyMode: ConnectionSafetyMode
 }
 
 export interface DatabaseInfo { readonly name: string }

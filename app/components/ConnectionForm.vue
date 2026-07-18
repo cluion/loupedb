@@ -1,18 +1,25 @@
 <script setup lang="ts">
-import type { SslMode } from '#shared/types'
+import type { ConnectionEnvironment, ConnectionSafetyMode, ConnectionSessionInfo, SslMode } from '#shared/types'
+import { defaultSafetyMode } from '#shared/connectionSafety'
 
-const emit = defineEmits<{ created: [id: string, name: string] }>()
+const emit = defineEmits<{ created: [session: ConnectionSessionInfo] }>()
 const { create } = useConnections()
 const form = reactive({
   name: '', host: '', port: 5432, database: '', username: '', password: '',
   ssl: 'auto' as SslMode | 'auto',
+  environment: 'development' as ConnectionEnvironment,
+  safetyMode: 'normal' as ConnectionSafetyMode,
 })
 const error = ref<string | null>(null)
+
+watch(() => form.environment, (environment) => {
+  form.safetyMode = defaultSafetyMode(environment)
+})
 
 async function submit() {
   error.value = null
   const res = await create({ ...form })
-  if (res.ok) emit('created', res.data.id, form.name)
+  if (res.ok) emit('created', res.data)
   else error.value = res.error.message
 }
 </script>
@@ -33,6 +40,19 @@ async function submit() {
       <option value="require">require</option>
       <option value="verify-full">verify-full</option>
     </select>
+    <select v-model="form.environment" aria-label="連線環境">
+      <option value="development">Development</option>
+      <option value="staging">Staging</option>
+      <option value="production">Production</option>
+    </select>
+    <select v-model="form.safetyMode" aria-label="安全模式">
+      <option value="normal">Normal・一般模式</option>
+      <option value="safe">Safe・危險操作需確認</option>
+      <option value="read-only">Read-only・禁止寫入</option>
+    </select>
+    <p v-if="form.environment === 'production'" class="full safety-hint">
+      Production 預設使用 Safe mode；也可改為 Read-only
+    </p>
     <button type="submit" class="primary full">連線</button>
     <p v-if="error" role="alert" class="full">{{ error }}</p>
   </form>
@@ -45,4 +65,5 @@ async function submit() {
   gap: 10px;
 }
 .full { grid-column: 1 / -1; }
+.safety-hint { margin: 0; color: var(--brass); font-size: 12px; }
 </style>

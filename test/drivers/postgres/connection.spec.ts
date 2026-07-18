@@ -12,6 +12,7 @@ describe('postgres driver lifecycle', () => {
       name: 't', driver: 'postgres', host: handle.config.host, port: handle.config.port,
       database: handle.config.database, username: handle.config.username,
       password: handle.config.password, ssl: 'disable',
+      environment: 'development', safetyMode: 'normal',
     })
     expect(driver.status).toBe('closed')
     await driver.connect()
@@ -26,6 +27,7 @@ describe('postgres driver lifecycle', () => {
       name: 't', driver: 'postgres', host: handle.config.host, port: handle.config.port,
       database: handle.config.database, username: handle.config.username,
       password: handle.config.password, ssl: 'disable',
+      environment: 'development', safetyMode: 'normal',
     } as const
     const a = createPostgresDriver(cfg)
     const b = createPostgresDriver(cfg)

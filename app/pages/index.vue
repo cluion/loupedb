@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { clearSqlWorkspacePersistence } from '../stores/sqlWorkspace'
 
-const { currentConnectionId, currentConnectionName, setCurrentConnection, restoreSession } = useSession()
+const {
+  currentConnectionId,
+  currentConnectionName,
+  currentConnectionEnvironment,
+  currentConnectionSafetyMode,
+  setCurrentConnection,
+  restoreSession,
+} = useSession()
 const { remove } = useConnections()
 const locked = ref(false)
 // connId is the sibling session bound to the selected database
@@ -79,7 +86,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
     <div class="lens-card">
       <p class="wordmark mark"><span class="ring" /> LoupeDB</p>
       <AppPasswordGate v-if="locked" @unlocked="locked = false; refreshNuxtData()" />
-      <ConnectionList v-else @connect="(id, name) => setCurrentConnection(id, name)" />
+      <ConnectionList v-else @connect="setCurrentConnection" />
     </div>
   </div>
 
@@ -87,6 +94,8 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
     <WorkspaceHeader
       class="area-header"
       :connection-label="currentConnectionName ?? currentConnectionId.slice(0, 8)"
+      :environment="currentConnectionEnvironment"
+      :safety-mode="currentConnectionSafetyMode"
       @disconnect="disconnect"
     />
     <aside class="rail">
@@ -109,6 +118,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           <DataGrid
             :key="`${selected.connId}.${selected.schema}.${selected.table}`"
             :connection-id="selected.connId" :schema="selected.schema" :table="selected.table"
+            :safety-mode="currentConnectionSafetyMode"
             @dirty-state="hasStagedChanges = $event"
           />
           <StreamResult :connection-id="selected.connId" :schema="selected.schema" :table="selected.table" />
@@ -129,6 +139,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           :suggested-connection-id="activeConnId"
           :suggested-database="selected?.database ?? null"
           :suggested-schema="selected?.schema ?? null"
+          :safety-mode="currentConnectionSafetyMode"
         />
       </section>
     </main>

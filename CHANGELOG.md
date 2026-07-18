@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Connection Safety Mode**：連線可標示 Development、Staging 或 Production 並在已存連線與工作區顯示環境色；Production 預設 Safe mode，SQL 工作台與 DataGrid 對 `UPDATE`、`DELETE`、`DROP`、`TRUNCATE` 要求明確確認；Read-only mode 同時由 API policy 與 PostgreSQL `default_transaction_read_only` 阻止寫入，安全設定會隨連線保存並由 sibling database session 沿用
+
 ## [0.14.0] - 2026-07-18
 
 ### Added

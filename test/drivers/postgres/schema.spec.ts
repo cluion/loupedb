@@ -50,6 +50,7 @@ async function setup(): Promise<DatabaseDriver> {
     name: 't', driver: 'postgres', host: handle.config.host, port: handle.config.port,
     database: handle.config.database, username: handle.config.username,
     password: handle.config.password, ssl: 'disable',
+    environment: 'development', safetyMode: 'normal',
   })
   await driver.connect()
   return driver

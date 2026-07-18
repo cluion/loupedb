@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SavedQuery, SavedQueryOrganizationPatch, SqlExecutionResult } from '#shared/types'
+import type { ConnectionSafetyMode, SavedQuery, SavedQueryOrganizationPatch, SqlExecutionResult } from '#shared/types'
 import { useSqlWorkspace, type SqlTab, type SqlTabContext } from '../stores/sqlWorkspace'
 import { useQueryHistory } from '../stores/queryHistory'
 
@@ -10,7 +10,8 @@ const props = withDefaults(defineProps<{
   suggestedConnectionId: string
   suggestedDatabase?: string | null
   suggestedSchema?: string | null
-}>(), { suggestedDatabase: null, suggestedSchema: null })
+  safetyMode?: ConnectionSafetyMode
+}>(), { suggestedDatabase: null, suggestedSchema: null, safetyMode: 'normal' })
 
 const currentContext = computed<SqlTabContext>(() => ({
   connectionId: props.suggestedConnectionId,
@@ -303,6 +304,7 @@ function timeLabel(at: number): string {
         :result="workspace.activeTab.value.result"
         :previous-result="workspace.activeTab.value.previousResult"
         :default-schema="workspace.activeTab.value.schema"
+        :safety-mode="safetyMode"
         @update:model-value="workspace.updateTab(workspace.activeTab.value!.id, { sql: $event })"
         @update:result="updateResult(workspace.activeTab.value!.id, $event)"
         @execution-started="startExecution(workspace.activeTab.value!.id)"

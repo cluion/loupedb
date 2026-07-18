@@ -6,9 +6,18 @@ import ConnectionList from '../../app/components/ConnectionList.vue'
 import AppPasswordGate from '../../app/components/AppPasswordGate.vue'
 
 const { createMock, openSavedMock, listMock, removeSavedMock } = vi.hoisted(() => ({
-  createMock: vi.fn(async () => ({ ok: true as const, data: { id: 'new-id' } })),
-  openSavedMock: vi.fn(async () => ({ ok: true as const, data: { id: 'reopened-id' } })),
-  listMock: vi.fn(async () => ({ ok: true as const, data: [{ name: 'saved-conn' }] })),
+  createMock: vi.fn(async () => ({
+    ok: true as const,
+    data: { id: 'new-id', name: 'n', environment: 'development' as const, safetyMode: 'normal' as const },
+  })),
+  openSavedMock: vi.fn(async () => ({
+    ok: true as const,
+    data: { id: 'reopened-id', name: 'saved-conn', environment: 'production' as const, safetyMode: 'safe' as const },
+  })),
+  listMock: vi.fn(async () => ({
+    ok: true as const,
+    data: [{ name: 'saved-conn', environment: 'production' as const, safetyMode: 'safe' as const }],
+  })),
   removeSavedMock: vi.fn(async () => ({ ok: true as const, data: { deleted: true } })),
 }))
 
@@ -42,14 +51,30 @@ describe('ConnectionForm', () => {
 
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
       name: 'n', host: 'h', port: 5433, database: 'd', username: 'u', password: 'p', ssl: 'require',
+      environment: 'development', safetyMode: 'normal',
     }))
-    expect(w.emitted('created')).toEqual([['new-id', 'n']]) // name rides along for display
+    expect(w.emitted('created')).toEqual([[
+      { id: 'new-id', name: 'n', environment: 'development', safetyMode: 'normal' },
+    ]])
   })
 
   it('ssl defaults to auto and password input is type password', async () => {
     const w = await mountSuspended(ConnectionForm)
     expect((w.find('select[aria-label="SSL mode"]').element as HTMLSelectElement).value).toBe('auto')
     expect(w.find('input[placeholder="password"]').attributes('type')).toBe('password')
+  })
+
+  it('defaults production connections to safe mode while allowing read-only', async () => {
+    const w = await mountSuspended(ConnectionForm)
+    await w.get('[aria-label="連線環境"]').setValue('production')
+    expect((w.get('[aria-label="安全模式"]').element as HTMLSelectElement).value).toBe('safe')
+    expect(w.text()).toContain('Production 預設使用 Safe mode')
+
+    await w.get('[aria-label="安全模式"]').setValue('read-only')
+    await w.find('form').trigger('submit')
+    expect(createMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      environment: 'production', safetyMode: 'read-only',
+    }))
   })
 
   it('shows error message when create fails', async () => {
@@ -66,10 +91,14 @@ describe('ConnectionList', () => {
   it('renders saved connections and reconnects via openSaved', async () => {
     const w = await mountSuspended(ConnectionList)
     expect(w.text()).toContain('saved-conn')
+    expect(w.text()).toContain('PROD')
+    expect(w.text()).toContain('SAFE')
     await w.find('li button').trigger('click')
     await w.vm.$nextTick()
     expect(openSavedMock).toHaveBeenCalledWith('saved-conn')
-    expect(w.emitted('connect')).toEqual([['reopened-id', 'saved-conn']])
+    expect(w.emitted('connect')).toEqual([[
+      { id: 'reopened-id', name: 'saved-conn', environment: 'production', safetyMode: 'safe' },
+    ]])
   })
 
   it('deleting a saved connection calls removeSaved and refreshes the list', async () => {

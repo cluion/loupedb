@@ -18,10 +18,11 @@ describe('connections API', async () => {
   beforeAll(async () => { handle = await startPgContainer() })
   afterAll(async () => { await handle.container.stop() })
 
-  const body = (name: string) => ({
+  const body = (name: string, extra: Record<string, unknown> = {}) => ({
     name, driver: 'postgres', host: handle.config.host, port: handle.config.port,
     database: handle.config.database, username: handle.config.username,
     password: handle.config.password,
+    ...extra,
   })
 
   it('POST creates a session and returns id, GET lists without password, DELETE closes', async () => {
@@ -30,10 +31,23 @@ describe('connections API', async () => {
     const id = created.ok ? created.data.id : ''
     expect(id).toBeTypeOf('string')
     expect(id.length).toBeGreaterThan(0)
+    if (created.ok) {
+      expect(created.data).toMatchObject({
+        name: 't', environment: 'development', safetyMode: 'normal',
+      })
+    }
 
-    const list = await $fetch<Envelope<Array<{ name: string }>>>('/api/connections')
+    const list = await $fetch<Envelope<Array<{
+      name: string
+      environment: string
+      safetyMode: string
+    }>>>('/api/connections')
     expect(list.ok).toBe(true)
-    if (list.ok) expect(list.data.map(c => c.name)).toContain('t')
+    if (list.ok) {
+      expect(list.data.find(c => c.name === 't')).toMatchObject({
+        environment: 'development', safetyMode: 'normal',
+      })
+    }
     expect(JSON.stringify(list)).not.toContain(handle.config.password)
 
     const del = await $fetch<Envelope<{ closed: boolean }>>(`/api/connections/${id}`, { method: 'DELETE' })
@@ -46,7 +60,36 @@ describe('connections API', async () => {
       method: 'POST', body: { name: 'saved' },
     })
     expect(reopened.ok).toBe(true)
-    if (reopened.ok) expect(reopened.data.id).toBeTypeOf('string')
+    if (reopened.ok) {
+      expect(reopened.data).toMatchObject({
+        id: expect.any(String), name: 'saved', environment: 'development', safetyMode: 'normal',
+      })
+    }
+  })
+
+  it('defaults production connections to safe mode and persists explicit read-only mode', async () => {
+    const production = await $fetch<Envelope<{
+      id: string
+      environment: string
+      safetyMode: string
+    }>>('/api/connections', {
+      method: 'POST', body: body('prod-safe', { environment: 'production' }),
+    })
+    expect(production.ok && production.data).toMatchObject({
+      environment: 'production', safetyMode: 'safe',
+    })
+
+    const readOnly = await $fetch<Envelope<{
+      id: string
+      environment: string
+      safetyMode: string
+    }>>('/api/connections', {
+      method: 'POST',
+      body: body('prod-read-only', { environment: 'production', safetyMode: 'read-only' }),
+    })
+    expect(readOnly.ok && readOnly.data).toMatchObject({
+      environment: 'production', safetyMode: 'read-only',
+    })
   })
 
   it('POST /open unknown name returns NOT_FOUND envelope', async () => {

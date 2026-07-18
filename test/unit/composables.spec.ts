@@ -79,6 +79,26 @@ describe('useQuery', () => {
     })
   })
 
+  it('sends explicit safety confirmation only after the user confirms', async () => {
+    const query = useQuery('c1')
+    await query.execute('delete from items', [], 'q-safe', true)
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/query', {
+      method: 'POST',
+      body: { sql: 'delete from items', params: [], queryId: 'q-safe', confirmedDangerous: true },
+    })
+    await query.applyTableChanges({
+      schema: 'public', table: 'items',
+      changes: [{ kind: 'delete', identity: { id: 1 }, version: '9' }],
+    }, true)
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/connections/c1/tables/public/items/changes', {
+      method: 'POST',
+      body: {
+        changes: [{ kind: 'delete', identity: { id: 1 }, version: '9' }],
+        confirmedDangerous: true,
+      },
+    })
+  })
+
   it('gets transaction status and posts transaction actions', async () => {
     const query = useQuery('c1')
     await query.transactionStatus()

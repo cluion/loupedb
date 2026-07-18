@@ -13,7 +13,12 @@ export default defineEventHandler(async (event) => {
   }
   try {
     const id = await useConnectionManager().open(saved)
-    return ok({ id })
+    return ok({
+      id,
+      name: saved.name,
+      environment: saved.environment,
+      safetyMode: saved.safetyMode,
+    })
   } catch (err) {
     return fail(toDatabaseError(err))
   }

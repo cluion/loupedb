@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import type { BrowseOpts, CellUpdateInput, ColumnInfo, NormalizedType, QueryResult, RowDeleteInput, RowInsertInput, TableChange, TableSchema } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, ColumnInfo, ConnectionSafetyMode, NormalizedType, QueryResult, RowDeleteInput, RowInsertInput, TableChange, TableSchema } from '#shared/types'
 
-const props = defineProps<{ connectionId: string; schema: string; table: string }>()
+const props = withDefaults(defineProps<{
+  connectionId: string
+  schema: string
+  table: string
+  safetyMode?: ConnectionSafetyMode
+}>(), { safetyMode: 'normal' })
 const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
 const { applyTableChanges, browse } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
@@ -107,6 +112,10 @@ const stagedChanges = computed<ReadonlyArray<TableChange>>(() => [
     change: { kind: 'delete' as const, identity: change.identity, version: change.version },
   })),
 ].sort((left, right) => left.order - right.order).map(({ change }) => change))
+const isConnectionReadOnly = computed(() => props.safetyMode === 'read-only')
+const stagedNeedsSafetyConfirmation = computed(() => (
+  stagedChanges.value.some((change) => change.kind === 'update' || change.kind === 'delete')
+))
 watch(stagedCount, (count) => emit('dirty-state', count > 0), { immediate: true })
 onUnmounted(() => emit('dirty-state', false))
 
@@ -256,6 +265,7 @@ function canEditCell(
   const identity = identityFor(row)
   const schemaColumn = tableInfo.value?.columns.find((candidate) => candidate.name === column.name)
   return identity !== null
+    && !isConnectionReadOnly.value
     && rowVersion(rowIndex) !== null
     && !isStagedDelete(row)
     && !identity.columns.includes(column.name)
@@ -353,7 +363,7 @@ function stageUpdate() {
 }
 
 function startInsert(source?: Readonly<Record<string, unknown>>) {
-  if (!tableInfo.value || saving.value) return
+  if (!tableInfo.value || saving.value || isConnectionReadOnly.value) return
   closeWritePanels()
   notice.value = null
   const keyColumns = new Set([
@@ -420,7 +430,8 @@ function stageInsert() {
 }
 
 function canDeleteRow(row: Readonly<Record<string, unknown>>, rowIndex: number): boolean {
-  return identityFor(row) !== null
+  return !isConnectionReadOnly.value
+    && identityFor(row) !== null
     && rowVersion(rowIndex) !== null
     && !isStagedDelete(row)
 }
@@ -480,12 +491,23 @@ function revertAll() {
 
 async function applyAll() {
   if (!stagedCount.value || saving.value) return
+  if (isConnectionReadOnly.value) {
+    writeError.value = '整批未套用：此連線為 Read-only，禁止寫入'
+    return
+  }
+  const confirmedDangerous = props.safetyMode === 'safe' && stagedNeedsSafetyConfirmation.value
+    ? window.confirm(`Safe mode：即將套用 ${stagedCount.value} 項變更，其中包含 UPDATE／DELETE。確定繼續嗎？`)
+    : false
+  if (props.safetyMode === 'safe' && stagedNeedsSafetyConfirmation.value && !confirmedDangerous) return
   saving.value = true
   writeError.value = null
   try {
-    const response = await applyTableChanges({
+    const input = {
       schema: props.schema, table: props.table, changes: stagedChanges.value,
-    })
+    }
+    const response = confirmedDangerous
+      ? await applyTableChanges(input, true)
+      : await applyTableChanges(input)
     if (!response.ok) {
       writeError.value = `整批未套用：${response.error.message}`
       return
@@ -509,7 +531,8 @@ async function applyAll() {
     <div v-if="error" role="alert">{{ error }}</div>
     <div v-if="metadataError" role="alert">{{ metadataError }}</div>
     <p v-if="tableInfo" class="editability" data-testid="editability-status">
-      <template v-if="tableInfo.primaryKey.length">可編輯：使用 primary key 安全定位；雙擊非鍵純量欄位</template>
+      <template v-if="isConnectionReadOnly">Read-only 連線：資料僅供瀏覽，新增、編輯與刪除皆停用</template>
+      <template v-else-if="tableInfo.primaryKey.length">可編輯：使用 primary key 安全定位；雙擊非鍵純量欄位</template>
       <template v-else-if="tableInfo.uniqueKeys.length">可編輯：使用 unique key 安全定位；NULL 唯一鍵資料列維持唯讀</template>
       <template v-else>無 primary key 或 unique key：可新增或 Clone，但既有資料唯讀且不可刪除</template>
     </p>
@@ -529,7 +552,7 @@ async function applyAll() {
       </select>
       <input v-model="filterValue" placeholder="值" :disabled="stagedCount > 0">
       <button type="submit" :disabled="stagedCount > 0">套用</button>
-      <button type="button" :disabled="!tableInfo || saving" @click="startInsert()">新增資料列</button>
+      <button type="button" :disabled="!tableInfo || saving || isConnectionReadOnly" @click="startInsert()">新增資料列</button>
     </form>
     <div v-if="loading && !result" class="loading">載入中…</div>
     <div class="scroll">
@@ -587,7 +610,7 @@ async function applyAll() {
             <td class="row-actions">
               <button
                 type="button" class="ghost" :aria-label="`Clone 第 ${offset + i + 1} 列`"
-                :disabled="isStagedDelete(row)" @click="startInsert(row)"
+                :disabled="isStagedDelete(row) || isConnectionReadOnly" @click="startInsert(row)"
               >
                 Clone
               </button>

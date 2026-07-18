@@ -1,6 +1,7 @@
 import { readBody } from 'h3'
 import type { CellUpdateInput } from '#shared/types'
 import { fail, withConnection } from '../../../../../../utils/api'
+import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
 function invalid(message: string) {
   return fail({ code: 'VALIDATION', message, severity: 'error', retryable: false })
@@ -35,5 +36,8 @@ export default defineEventHandler(async (event) => {
     originalValue: body.originalValue,
     identity,
   }
-  return withConnection(event, id, (driver) => driver.updateCell(input))
+  return withConnection(event, id, (driver) => {
+    assertMutationAllowed(driver.config, 'UPDATE', body.confirmedDangerous === true)
+    return driver.updateCell(input)
+  })
 })

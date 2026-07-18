@@ -1,6 +1,7 @@
 import { readBody } from 'h3'
 import type { RowDeleteInput } from '#shared/types'
 import { fail, withConnection } from '../../../../../../utils/api'
+import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
 function invalid(message: string) {
   return fail({ code: 'VALIDATION', message, severity: 'error', retryable: false })
@@ -26,5 +27,8 @@ export default defineEventHandler(async (event) => {
     return invalid('version is required')
   }
   const input: RowDeleteInput = { schema, table, identity, version: body.version }
-  return withConnection(event, id, (driver) => driver.deleteRow(input))
+  return withConnection(event, id, (driver) => {
+    assertMutationAllowed(driver.config, 'DELETE', body.confirmedDangerous === true)
+    return driver.deleteRow(input)
+  })
 })

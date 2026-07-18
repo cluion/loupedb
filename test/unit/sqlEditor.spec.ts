@@ -195,6 +195,49 @@ describe('SqlEditor', () => {
     expect(executeMock.mock.calls[0]![2]).toEqual(expect.any(String))
   })
 
+  it('requires Safe mode confirmation before sending dangerous SQL', async () => {
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, modelValue: 'UPDATE items SET label = label', safetyMode: 'safe' },
+    })
+    expect(w.get('[data-testid="safety-notice"]').text()).toContain('Safe mode')
+    await w.get('button.primary').trigger('click')
+
+    expect(executeMock).not.toHaveBeenCalled()
+    expect(w.get('[aria-label="Safe mode 危險操作確認"]').text()).toContain('UPDATE')
+    await w.findAll('button').find(button => button.text() === '確認並執行')!.trigger('submit')
+
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalledWith(
+      'UPDATE items SET label = label', [], expect.any(String), true,
+    ))
+  })
+
+  it('cancels Safe mode confirmation without sending the query', async () => {
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, modelValue: 'DELETE FROM items', safetyMode: 'safe' },
+    })
+    await w.get('button.primary').trigger('click')
+    await w.get('[aria-label="關閉危險操作確認"]').trigger('click')
+    expect(executeMock).not.toHaveBeenCalled()
+    expect(w.find('[aria-label="Safe mode 危險操作確認"]').exists()).toBe(false)
+  })
+
+  it('blocks writing SQL locally in Read-only mode while allowing SELECT', async () => {
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, modelValue: 'DROP TABLE items', safetyMode: 'read-only' },
+    })
+    expect(w.get('[data-testid="safety-notice"]').text()).toContain('PostgreSQL session 均禁止寫入')
+    await w.get('button.primary').trigger('click')
+    expect(w.get('[role="alert"]').text()).toContain('Read-only')
+    expect(executeMock).not.toHaveBeenCalled()
+
+    await w.get('textarea').setValue('SELECT 1')
+    await w.get('button.primary').trigger('click')
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalledWith('SELECT 1', [], expect.any(String)))
+  })
+
   it('cancels parameter entry without executing and rejects parameters in a complete script', async () => {
     const w = await mountSuspended(SqlEditor, mountOpts)
     await w.get('textarea').setValue('select $1; select 2;')
@@ -299,6 +342,19 @@ describe('SqlEditor', () => {
     expect(w.get('[data-testid="query-messages"]').text()).toContain('update warning')
     await w.get('[aria-label="結果 3 SELECT"]').trigger('click')
     expect(w.get('tbody td').text()).toBe('last')
+  })
+
+  it('confirms a dangerous complete Script once before executing any statement', async () => {
+    const script = 'select 1; truncate table logs; select 2;'
+    const w = await mountSuspended(SqlEditor, {
+      ...mountOpts,
+      props: { ...mountOpts.props, modelValue: script, safetyMode: 'safe' },
+    })
+    await w.get('[aria-label="執行完整 Script"]').trigger('click')
+    expect(executeScriptMock).not.toHaveBeenCalled()
+    expect(w.get('[aria-label="Safe mode 危險操作確認"]').text()).toContain('TRUNCATE')
+    await w.findAll('button').find(button => button.text() === '確認並執行')!.trigger('submit')
+    await vi.waitFor(() => expect(executeScriptMock).toHaveBeenCalledWith(script, expect.any(String), true))
   })
 
   it('selects the failed statement while keeping completed script results available', async () => {

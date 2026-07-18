@@ -15,6 +15,8 @@ describe('query API', async () => {
 
   let handle: PgTestHandle
   let connId: string
+  let safeConnId: string
+  let readOnlyConnId: string
 
   beforeAll(async () => {
     handle = await startPgContainer()
@@ -24,6 +26,14 @@ describe('query API', async () => {
     })
     await seedSql.unsafe(`create table items (id serial primary key, label text)`).simple()
     await seedSql.unsafe(`insert into items (label) values ('a'), ('b')`).simple()
+    await seedSql.unsafe(`
+      create function write_item(value text) returns integer language plpgsql as $$
+      begin
+        insert into items (label) values (value);
+        return 1;
+      end
+      $$
+    `).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -35,6 +45,28 @@ describe('query API', async () => {
     })
     if (!created.ok) throw new Error('setup connection failed')
     connId = created.data.id
+
+    const safe = await $fetch<Envelope<{ id: string }>>('/api/connections', {
+      method: 'POST',
+      body: {
+        name: 'query-safe', driver: 'postgres', host: handle.config.host, port: handle.config.port,
+        database: handle.config.database, username: handle.config.username, password: handle.config.password,
+        environment: 'production', safetyMode: 'safe',
+      },
+    })
+    if (!safe.ok) throw new Error('setup safe connection failed')
+    safeConnId = safe.data.id
+
+    const readOnly = await $fetch<Envelope<{ id: string }>>('/api/connections', {
+      method: 'POST',
+      body: {
+        name: 'query-read-only', driver: 'postgres', host: handle.config.host, port: handle.config.port,
+        database: handle.config.database, username: handle.config.username, password: handle.config.password,
+        environment: 'production', safetyMode: 'read-only',
+      },
+    })
+    if (!readOnly.ok) throw new Error('setup read-only connection failed')
+    readOnlyConnId = readOnly.data.id
   })
   afterAll(async () => { await handle.container.stop() })
 
@@ -55,6 +87,56 @@ describe('query API', async () => {
     })
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.data.rows.map(x => x.label)).toEqual(['b'])
+  })
+
+  it('requires explicit Safe mode confirmation before dangerous query or script execution', async () => {
+    const blocked = await $fetch<Envelope<QueryResult>>(`/api/connections/${safeConnId}/query`, {
+      method: 'POST', body: { sql: "update items set label = 'blocked' where id = 2" },
+    })
+    expect(!blocked.ok && blocked.error.code).toBe('SAFETY_CONFIRMATION_REQUIRED')
+
+    const script = await $fetch<Envelope<ScriptExecutionResult>>(`/api/connections/${safeConnId}/script`, {
+      method: 'POST', body: { sql: "select 99; delete from items where id = 2;" },
+    })
+    expect(!script.ok && script.error.code).toBe('SAFETY_CONFIRMATION_REQUIRED')
+
+    const confirmed = await $fetch<Envelope<QueryResult>>(`/api/connections/${safeConnId}/query`, {
+      method: 'POST',
+      body: {
+        sql: "update items set label = 'confirmed' where id = 2",
+        confirmedDangerous: true,
+      },
+    })
+    expect(confirmed.ok && confirmed.data.affectedRows).toBe(1)
+    await $fetch(`/api/connections/${safeConnId}/query`, {
+      method: 'POST',
+      body: { sql: "update items set label = 'b' where id = 2", confirmedDangerous: true },
+    })
+  })
+
+  it('enforces Read-only in both API policy and PostgreSQL session', async () => {
+    const read = await $fetch<Envelope<QueryResult>>(`/api/connections/${readOnlyConnId}/query`, {
+      method: 'POST', body: { sql: 'select count(*)::int as total from items' },
+    })
+    expect(read.ok).toBe(true)
+
+    const blockedSql = await $fetch<Envelope<QueryResult>>(`/api/connections/${readOnlyConnId}/query`, {
+      method: 'POST', body: { sql: 'create table read_only_blocked(id int)' },
+    })
+    expect(!blockedSql.ok && blockedSql.error.code).toBe('READ_ONLY_MODE')
+
+    // SELECT itself passes the policy classifier; PostgreSQL's read-only
+    // transaction setting still blocks a writing function.
+    const writingFunction = await $fetch<Envelope<QueryResult>>(`/api/connections/${readOnlyConnId}/query`, {
+      method: 'POST', body: { sql: "select write_item('blocked function')" },
+    })
+    expect(!writingFunction.ok && writingFunction.error.code).toBe('25006')
+
+    const blockedGridInsert = await $fetch<Envelope<QueryResult>>(
+      `/api/connections/${readOnlyConnId}/tables/public/items/rows`,
+      { method: 'POST', body: { values: { label: 'blocked grid' } } },
+    )
+    expect(!blockedGridInsert.ok && blockedGridInsert.error.code).toBe('READ_ONLY_MODE')
   })
 
   it('manages a connection-level manual transaction', async () => {

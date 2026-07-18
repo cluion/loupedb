@@ -54,7 +54,11 @@ export function createConnection(config: ConnectionConfig): PostgresHandle {
       host: config.host, port: config.port, database: config.database,
       username: config.username, password: config.password, ssl,
       max: 1, idle_timeout: 1800, connect_timeout: 10,
-      connection: { statement_timeout: 30000, application_name: 'loupedb' },
+      connection: {
+        statement_timeout: 30000,
+        application_name: 'loupedb',
+        default_transaction_read_only: config.safetyMode === 'read-only',
+      },
       onnotice: (notice) => { messages.push(queryMessage(notice)) },
     })
     return { sql, messages }

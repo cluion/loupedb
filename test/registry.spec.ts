@@ -39,6 +39,7 @@ describe('driverRegistry', () => {
     const config = {
       name: 't', driver: 'fake', host: 'h', port: 5432, database: 'd',
       username: 'u', password: 'p', ssl: 'disable',
+      environment: 'development', safetyMode: 'normal',
     } as unknown as ConnectionConfig
     const driver = createDriver(config)
     expect(driver.config.host).toBe('h')

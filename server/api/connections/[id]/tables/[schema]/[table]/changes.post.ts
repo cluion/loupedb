@@ -1,6 +1,7 @@
 import { readBody } from 'h3'
 import type { TableChange, TableChangesInput } from '#shared/types'
 import { fail, withConnection } from '../../../../../../utils/api'
+import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
 const MAX_STAGED_CHANGES = 500
 
@@ -70,5 +71,11 @@ export default defineEventHandler(async (event) => {
     return invalid('every staged change must contain valid scalar values, identity and row version')
   }
   const input: TableChangesInput = { schema, table, changes: changes as TableChange[] }
-  return withConnection(event, id, (driver) => driver.applyTableChanges(input))
+  return withConnection(event, id, (driver) => {
+    for (const change of input.changes) {
+      const command = change.kind === 'insert' ? 'INSERT' : change.kind === 'update' ? 'UPDATE' : 'DELETE'
+      assertMutationAllowed(driver.config, command, body.confirmedDangerous === true)
+    }
+    return driver.applyTableChanges(input)
+  })
 })

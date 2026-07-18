@@ -1,6 +1,7 @@
 import { readBody } from 'h3'
 import type { RowInsertInput } from '#shared/types'
 import { fail, withConnection } from '../../../../../../utils/api'
+import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
 function invalid(message: string) {
   return fail({ code: 'VALIDATION', message, severity: 'error', retryable: false })
@@ -23,5 +24,8 @@ export default defineEventHandler(async (event) => {
     return invalid('values must contain only scalars or null')
   }
   const input: RowInsertInput = { schema, table, values }
-  return withConnection(event, id, (driver) => driver.insertRow(input))
+  return withConnection(event, id, (driver) => {
+    assertMutationAllowed(driver.config, 'INSERT')
+    return driver.insertRow(input)
+  })
 })

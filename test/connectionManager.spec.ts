@@ -12,6 +12,7 @@ function cfg(h: PgTestHandle['config']): ConnectionConfig {
   return {
     name: 't', driver: 'postgres', host: h.host, port: h.port,
     database: h.database, username: h.username, password: h.password, ssl: 'disable',
+    environment: 'development', safetyMode: 'normal',
   }
 }
 

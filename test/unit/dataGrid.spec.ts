@@ -153,6 +153,39 @@ describe('DataGrid', () => {
     await vi.waitFor(() => expect(w.text()).toContain('已套用 1 項變更'))
   })
 
+  it('requires Safe mode confirmation before applying staged updates', async () => {
+    const confirm = vi.fn().mockReturnValue(false)
+    vi.stubGlobal('confirm', confirm)
+    const w = await mountSuspended(DataGrid, { props: { ...props, safetyMode: 'safe' } })
+    await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))
+    await w.findAll('td')[1]!.trigger('dblclick')
+    await w.get('[aria-label="編輯 label 第 1 列"]').setValue('safe edit')
+    await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    expect(confirm).toHaveBeenCalled()
+    expect(applyTableChangesMock).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith(expect.objectContaining({
+      changes: [expect.objectContaining({ kind: 'update', value: 'safe edit' })],
+    }), true))
+    vi.unstubAllGlobals()
+  })
+
+  it('disables every DataGrid mutation in Read-only mode', async () => {
+    const w = await mountSuspended(DataGrid, { props: { ...props, safetyMode: 'read-only' } })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    expect(w.get('[data-testid="editability-status"]').text()).toContain('Read-only 連線')
+    expect(w.findAll('button').find(button => button.text() === '新增資料列')!.attributes('disabled')).toBeDefined()
+    expect(w.get('[aria-label="Clone 第 1 列"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[aria-label="刪除第 1 列"]').attributes('disabled')).toBeDefined()
+    await w.findAll('td')[1]!.trigger('dblclick')
+    expect(w.find('[aria-label="編輯 label 第 1 列"]').exists()).toBe(false)
+  })
+
   it('uses a non-null unique key to edit and delete rows without a primary key', async () => {
     describeMock.mockResolvedValueOnce({
       ok: true,

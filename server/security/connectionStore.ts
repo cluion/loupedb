@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ConnectionConfig } from '#shared/types'
+import { defaultSafetyMode, isConnectionEnvironment, isConnectionSafetyMode } from '#shared/connectionSafety'
 import { encrypt, decrypt } from './crypto'
 
 interface StoredConnection {
@@ -12,6 +13,8 @@ interface StoredConnection {
   readonly username: string
   readonly passwordEnc: string
   readonly ssl: ConnectionConfig['ssl']
+  readonly environment?: ConnectionConfig['environment']
+  readonly safetyMode?: ConnectionConfig['safetyMode']
 }
 
 function dataDir(): string {
@@ -29,6 +32,7 @@ export async function saveConnections(list: ReadonlyArray<ConnectionConfig>): Pr
     name: c.name, driver: c.driver, host: c.host, port: c.port,
     database: c.database, username: c.username,
     passwordEnc: encrypt(c.password), ssl: c.ssl,
+    environment: c.environment, safetyMode: c.safetyMode,
   }))
   await mkdir(dataDir(), { recursive: true })
   await writeFile(file(), JSON.stringify(stored, null, 2), 'utf8')
@@ -38,11 +42,18 @@ export async function loadConnections(): Promise<ConnectionConfig[]> {
   try {
     const raw = await readFile(file(), 'utf8')
     const stored = JSON.parse(raw) as StoredConnection[]
-    return stored.map((s) => ({
-      name: s.name, driver: s.driver, host: s.host, port: s.port,
-      database: s.database, username: s.username,
-      password: decrypt(s.passwordEnc), ssl: s.ssl,
-    }))
+    return stored.map((s) => {
+      const environment = isConnectionEnvironment(s.environment) ? s.environment : 'development'
+      return {
+        name: s.name, driver: s.driver, host: s.host, port: s.port,
+        database: s.database, username: s.username,
+        password: decrypt(s.passwordEnc), ssl: s.ssl,
+        environment,
+        safetyMode: isConnectionSafetyMode(s.safetyMode)
+          ? s.safetyMode
+          : defaultSafetyMode(environment),
+      }
+    })
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw err

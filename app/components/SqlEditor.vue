@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  ConnectionSafetyMode,
   QueryMessage,
   QueryResult,
   ScriptExecutionResult,
@@ -7,6 +8,7 @@ import type {
   SqlExecutionResult,
   TransactionState,
 } from '#shared/types'
+import { dangerousSqlCommands, isPotentiallyWritingSql } from '#shared/connectionSafety'
 import { listSqlParameterPositions } from '#shared/sqlParameters'
 import { listSqlStatements, type RunnableSql } from '../utils/sqlStatements'
 
@@ -18,11 +20,13 @@ const props = withDefaults(defineProps<{
   result?: SqlExecutionResult | null
   previousResult?: SqlExecutionResult | null
   defaultSchema?: string | null
+  safetyMode?: ConnectionSafetyMode
 }>(), {
   modelValue: 'SELECT * FROM ',
   result: null,
   previousResult: null,
   defaultSchema: null,
+  safetyMode: 'normal',
 })
 const emit = defineEmits<{
   'update:modelValue': [sql: string]
@@ -74,6 +78,13 @@ interface QueryParameterDialog {
   readonly inputs: QueryParameterInput[]
 }
 
+interface SafetyConfirmationDialog {
+  readonly kind: 'query' | 'script'
+  readonly sql: string
+  readonly params: ReadonlyArray<unknown>
+  readonly commands: ReadonlyArray<string>
+}
+
 const sql = ref(props.modelValue)
 const codeEditor = ref<SqlCodeEditorHandle | null>(null)
 const queryOutput = ref<SqlExecutionResult | null>(props.result)
@@ -84,6 +95,7 @@ const error = ref<string | null>(null)
 const failedMessages = ref<ReadonlyArray<QueryMessage>>([])
 const formatError = ref<string | null>(null)
 const parameterDialog = ref<QueryParameterDialog | null>(null)
+const safetyDialog = ref<SafetyConfirmationDialog | null>(null)
 const running = ref(false)
 const cancelling = ref(false)
 const transactionState = ref<TransactionState>({ status: 'idle', startedAt: null })
@@ -153,6 +165,7 @@ watch(() => props.connectionId, () => {
   failedMessages.value = []
   formatError.value = null
   parameterDialog.value = null
+  safetyDialog.value = null
   resultVersion.value = 'current'
   transactionState.value = { status: 'idle', startedAt: null }
   transactionError.value = null
@@ -286,6 +299,10 @@ function run(target: RunnableSql | null = runnable.value) {
   // requests inside one editor instance.
   const executedSql = target?.sql ?? sql.value
   if (activeRun) return
+  if (props.safetyMode === 'read-only' && isPotentiallyWritingSql(executedSql)) {
+    error.value = 'Read-only 連線禁止執行可能寫入資料的 SQL'
+    return
+  }
   const positions = listSqlParameterPositions(executedSql)
   const maxPosition = positions.at(-1) ?? 0
   if (maxPosition > MAX_QUERY_PARAMETER_POSITION) {
@@ -304,7 +321,7 @@ function run(target: RunnableSql | null = runnable.value) {
     }
     return
   }
-  return executeRun(executedSql, [])
+  return prepareExecution(executedSql, [])
 }
 
 async function submitParameters() {
@@ -319,18 +336,38 @@ async function submitParameters() {
   }
   lastParameterizedRun = { sql: dialog.sql, values: remembered }
   parameterDialog.value = null
-  await executeRun(dialog.sql, params)
+  await prepareExecution(dialog.sql, params)
 }
 
 function cancelParameters() {
   parameterDialog.value = null
 }
 
-async function executeRun(executedSql: string, params: ReadonlyArray<unknown>) {
+function prepareExecution(executedSql: string, params: ReadonlyArray<unknown>) {
+  if (props.safetyMode === 'read-only' && isPotentiallyWritingSql(executedSql)) {
+    error.value = 'Read-only 連線禁止執行可能寫入資料的 SQL'
+    return
+  }
+  const commands = dangerousSqlCommands(executedSql)
+  if (props.safetyMode === 'safe' && commands.length) {
+    safetyDialog.value = { kind: 'query', sql: executedSql, params, commands }
+    return
+  }
+  return executeRun(executedSql, params)
+}
+
+async function executeRun(
+  executedSql: string,
+  params: ReadonlyArray<unknown>,
+  confirmedDangerous = false,
+) {
   const runState = beginRun(executedSql)
   if (!runState) return
   try {
-    const r = await useQuery(runState.connectionId).execute(runState.sql, params, runState.queryId)
+    const query = useQuery(runState.connectionId)
+    const r = confirmedDangerous
+      ? await query.execute(runState.sql, params, runState.queryId, true)
+      : await query.execute(runState.sql, params, runState.queryId)
     // A future flow may allow a new request immediately after cancellation.
     // Guard now so a late response can never overwrite the newer result.
     if (activeRun !== runState) return
@@ -379,10 +416,26 @@ async function runScript() {
     error.value = '完整 Script 暫不支援參數；請執行選取範圍或游標所在 statement'
     return
   }
-  const runState = beginRun(sql.value)
+  if (props.safetyMode === 'read-only' && isPotentiallyWritingSql(sql.value)) {
+    error.value = 'Read-only 連線禁止執行含寫入操作的 Script'
+    return
+  }
+  const commands = dangerousSqlCommands(sql.value)
+  if (props.safetyMode === 'safe' && commands.length) {
+    safetyDialog.value = { kind: 'script', sql: sql.value, params: [], commands }
+    return
+  }
+  await executeScriptRun(sql.value)
+}
+
+async function executeScriptRun(executedSql: string, confirmedDangerous = false) {
+  const runState = beginRun(executedSql)
   if (!runState) return
   try {
-    const r = await useQuery(runState.connectionId).executeScript(runState.sql, runState.queryId)
+    const query = useQuery(runState.connectionId)
+    const r = confirmedDangerous
+      ? await query.executeScript(runState.sql, runState.queryId, true)
+      : await query.executeScript(runState.sql, runState.queryId)
     if (activeRun !== runState) return
     if (!r.ok) {
       failRun(runState, r.error.message, r.error.code, r.error.messages)
@@ -411,6 +464,18 @@ async function runScript() {
   } finally {
     void refreshTransactionState(runState.connectionId)
   }
+}
+
+async function confirmSafetyExecution() {
+  const dialog = safetyDialog.value
+  if (!dialog) return
+  safetyDialog.value = null
+  if (dialog.kind === 'script') await executeScriptRun(dialog.sql, true)
+  else await executeRun(dialog.sql, dialog.params, true)
+}
+
+function cancelSafetyExecution() {
+  safetyDialog.value = null
 }
 
 async function stop() {
@@ -518,6 +583,39 @@ function showResultVersion(version: 'current' | 'previous') {
         </div>
       </form>
     </div>
+    <div
+      v-if="safetyDialog"
+      class="parameter-backdrop"
+      @click.self="cancelSafetyExecution"
+    >
+      <form
+        class="parameter-dialog safety-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Safe mode 危險操作確認"
+        @submit.prevent="confirmSafetyExecution"
+        @keydown.esc.prevent="cancelSafetyExecution"
+      >
+        <div class="parameter-head">
+          <div>
+            <strong>Safe mode・確認危險操作</strong>
+            <p>此 SQL 包含 {{ safetyDialog.commands.join('、') }}，確認後才會送到伺服器執行</p>
+          </div>
+          <button type="button" class="close" aria-label="關閉危險操作確認" @click="cancelSafetyExecution">×</button>
+        </div>
+        <pre>{{ safetyDialog.sql }}</pre>
+        <div class="parameter-actions">
+          <button type="button" @click="cancelSafetyExecution">取消</button>
+          <button type="submit" class="danger-confirm">確認並執行</button>
+        </div>
+      </form>
+    </div>
+    <p v-if="safetyMode === 'read-only'" class="safety-notice read-only" data-testid="safety-notice">
+      Read-only：伺服器與 PostgreSQL session 均禁止寫入
+    </p>
+    <p v-else-if="safetyMode === 'safe'" class="safety-notice safe" data-testid="safety-notice">
+      Safe mode：UPDATE、DELETE、DROP、TRUNCATE 執行前需要確認
+    </p>
     <div class="actions">
       <button v-if="!running" class="primary" title="⌘⏎ / Ctrl+Enter" @click="run()">
         {{ runLabel }}
@@ -545,6 +643,9 @@ function showResultVersion(version: 'current' | 'previous') {
         <template v-if="transactionState.status === 'idle'">自動提交</template>
         <template v-else-if="transactionState.status === 'active'">交易中</template>
         <template v-else>交易失敗・需 Rollback</template>
+      </span>
+      <span :class="['safety-policy', safetyMode]">
+        {{ safetyMode === 'read-only' ? 'READ-ONLY' : safetyMode === 'safe' ? 'SAFE' : 'NORMAL' }}
       </span>
       <button
         v-if="transactionState.status === 'idle'"
@@ -705,12 +806,20 @@ function showResultVersion(version: 'current' | 'previous') {
 .parameter-row > input[type="text"] { min-width: 0; flex: 1; }
 .null-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .parameter-actions { justify-content: flex-end; }
+.safety-dialog pre { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.danger-confirm { border-color: var(--danger); color: var(--danger); }
+.safety-notice { margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; }
+.safety-notice.safe { border-color: var(--brass); color: var(--brass); }
+.safety-notice.read-only { border-color: var(--danger); color: var(--danger); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .execution-scope { flex-basis: 100%; color: var(--muted); font-size: 11px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 .transaction-status { font: 11px var(--font-data); color: var(--muted); white-space: nowrap; }
 .transaction-status.active { color: var(--brass); }
 .transaction-status.failed { color: var(--danger); }
+.safety-policy { font: 10px var(--font-data); color: var(--muted); }
+.safety-policy.safe { color: var(--brass); }
+.safety-policy.read-only { color: var(--danger); }
 .stop { border-color: var(--danger); color: var(--danger); }
 .stop:hover { border-color: var(--danger); background: rgba(224, 108, 94, 0.1); }
 .result-versions { display: flex; gap: 6px; }
