@@ -8,6 +8,7 @@ export interface ColumnInfo {
   readonly nativeType: string
   readonly type: NormalizedType
   readonly nullable: boolean
+  readonly editable?: boolean
   readonly defaultValue?: unknown
 }
 
@@ -107,6 +108,20 @@ export interface BrowseOpts {
   readonly orderBy?: string
   readonly orderDir?: 'asc' | 'desc'
   readonly filter?: ReadonlyArray<{ readonly column: string; readonly op: '=' | '!=' | '>' | '<' | 'like'; readonly value: unknown }>
+}
+
+export interface CellUpdateInput {
+  readonly schema: string
+  readonly table: string
+  readonly column: string
+  readonly value: unknown
+  readonly originalValue: unknown
+  readonly identity: Readonly<Record<string, unknown>>
+}
+
+export interface CellUpdateResult {
+  readonly affectedRows: 1
+  readonly row: Readonly<Record<string, unknown>>
 }
 
 export interface DatabaseError {

@@ -97,6 +97,17 @@ describe('useQuery', () => {
     })
   })
 
+  it('updateCell patches a table cell with identity and original value', async () => {
+    await useQuery('c1').updateCell({
+      schema: 'public', table: 'daily items', column: 'label', value: 'updated',
+      originalValue: 'old', identity: { id: 7 },
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables/public/daily%20items/cell', {
+      method: 'PATCH',
+      body: { column: 'label', value: 'updated', originalValue: 'old', identity: { id: 7 } },
+    })
+  })
+
   it('cancel posts queryId', async () => {
     await useQuery('c1').cancel('q9')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/cancel', {

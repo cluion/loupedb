@@ -70,6 +70,7 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
     select c.column_name as name,
            c.udt_name as native,
            c.is_nullable = 'YES' as nullable,
+           c.is_updatable = 'YES' as editable,
            c.column_default as col_default,
            t.typtype as type_kind
     from information_schema.columns c
@@ -82,7 +83,8 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
     const type = r.type_kind === 'e' ? 'enum' as const : normalizePgType(native)
     return {
       name: String(r.name), nativeType: native, type,
-      nullable: Boolean(r.nullable), defaultValue: r.col_default ?? undefined,
+      nullable: Boolean(r.nullable), editable: Boolean(r.editable),
+      defaultValue: r.col_default ?? undefined,
     }
   })
 

@@ -1,4 +1,4 @@
-import type { BrowseOpts, Envelope, QueryResult, ScriptExecutionResult, TransactionState } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, CellUpdateResult, Envelope, QueryResult, ScriptExecutionResult, TransactionState } from '#shared/types'
 
 export function useQuery(connId: string) {
   return {
@@ -23,6 +23,19 @@ export function useQuery(connId: string) {
     async browse(schema: string, table: string, opts: BrowseOpts) {
       return await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
         method: 'POST', body: { schema, table, opts },
+      })
+    },
+    async updateCell(input: CellUpdateInput) {
+      const schema = encodeURIComponent(input.schema)
+      const table = encodeURIComponent(input.table)
+      return await $fetch<Envelope<CellUpdateResult>>(`/api/connections/${connId}/tables/${schema}/${table}/cell`, {
+        method: 'PATCH',
+        body: {
+          column: input.column,
+          value: input.value,
+          originalValue: input.originalValue,
+          identity: input.identity,
+        },
       })
     },
     async cancel(queryId: string) {

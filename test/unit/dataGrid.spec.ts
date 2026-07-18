@@ -18,15 +18,19 @@ function result(rows: Array<Record<string, unknown>>): { ok: true; data: QueryRe
   }
 }
 
-const { browseMock } = vi.hoisted(() => ({
+const { browseMock, describeMock, updateCellMock } = vi.hoisted(() => ({
   browseMock: vi.fn(async (_s: string, _t: string, _o: BrowseOpts) =>
     ({ ok: true, data: { columns: [], rows: [], executionMs: 0 } })),
+  describeMock: vi.fn(),
+  updateCellMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   browse: browseMock,
+  updateCell: updateCellMock,
   execute: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
 }))
+mockNuxtImport('useSchema', () => () => ({ describe: describeMock }))
 
 const props = { connectionId: 'c1', schema: 'public', table: 'items' }
 const fullPage = [...Array(50)].map((_, i) => ({ id: i, label: `row${i}` }))
@@ -34,6 +38,19 @@ const fullPage = [...Array(50)].map((_, i) => ({ id: i, label: `row${i}` }))
 beforeEach(() => {
   browseMock.mockReset()
   browseMock.mockResolvedValue(result([{ id: 1, label: 'a' }]) as never)
+  describeMock.mockReset()
+  describeMock.mockResolvedValue({
+    ok: true,
+    data: {
+      schema: 'public', table: 'items',
+      columns: result([]).data.columns,
+      primaryKey: ['id'], foreignKeys: [],
+    },
+  })
+  updateCellMock.mockReset()
+  updateCellMock.mockResolvedValue({
+    ok: true, data: { affectedRows: 1, row: { id: 1, label: 'edited' } },
+  })
 })
 
 describe('DataGrid', () => {
@@ -102,5 +119,40 @@ describe('DataGrid', () => {
       offset: 0,
       filter: [{ column: 'label', op: 'like', value: '%a%' }],
     }))
+  })
+
+  it('previews and confirms one parameterized cell update by primary key', async () => {
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(2))
+
+    await w.findAll('td')[1]!.trigger('dblclick')
+    await w.get('[aria-label="編輯 label 第 1 列"]').setValue('edited')
+    await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
+    expect(w.get('[role="dialog"]').text()).toContain('最多更新 1 列')
+    expect(w.get('[role="dialog"] pre').text()).toContain('UPDATE "public"."items"')
+    expect(w.get('[role="dialog"] pre').text()).toContain('"id" IS NOT DISTINCT FROM $2')
+
+    browseMock.mockResolvedValue(result([{ id: 1, label: 'edited' }]) as never)
+    await w.findAll('button').find(button => button.text() === '確認寫入 1 列')!.trigger('click')
+    await vi.waitFor(() => expect(updateCellMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', column: 'label', value: 'edited',
+      originalValue: 'a', identity: { id: 1 },
+    }))
+    await vi.waitFor(() => expect(w.text()).toContain('已更新 1 列'))
+  })
+
+  it('keeps every cell read-only when the table has no primary key', async () => {
+    describeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        schema: 'public', table: 'items', columns: result([]).data.columns,
+        primaryKey: [], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.get('[data-testid="editability-status"]').text()).toContain('唯讀'))
+    await w.findAll('td')[1]!.trigger('dblclick')
+    expect(w.find('[aria-label="編輯 label 第 1 列"]').exists()).toBe(false)
+    expect(updateCellMock).not.toHaveBeenCalled()
   })
 })

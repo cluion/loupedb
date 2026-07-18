@@ -45,6 +45,47 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('updates one scalar cell by primary key and rejects a stale original value', async () => {
+    const driver = await setup()
+    const updated = await driver.updateCell({
+      schema: 'public', table: 'items', column: 'label', value: 'edited',
+      originalValue: 'a', identity: { id: 1 },
+    })
+    expect(updated).toMatchObject({ affectedRows: 1, row: { id: 1, label: 'edited', qty: 1 } })
+    await expect(driver.updateCell({
+      schema: 'public', table: 'items', column: 'label', value: 'overwritten',
+      originalValue: 'a', identity: { id: 1 },
+    })).rejects.toMatchObject({ code: 'ROW_CHANGED' })
+    await driver.disconnect()
+  })
+
+  it('keeps primary keys and tables without a primary key read-only', async () => {
+    const driver = await setup()
+    await expect(driver.updateCell({
+      schema: 'public', table: 'items', column: 'id', value: 9,
+      originalValue: 1, identity: { id: 1 },
+    })).rejects.toMatchObject({ code: 'READ_ONLY_COLUMN' })
+
+    await driver.execute('create table notes (label text)')
+    await driver.execute("insert into notes values ('a')")
+    await expect(driver.updateCell({
+      schema: 'public', table: 'notes', column: 'label', value: 'edited',
+      originalValue: 'a', identity: { label: 'a' },
+    })).rejects.toMatchObject({ code: 'SAFE_EDIT_REQUIRED' })
+    await driver.disconnect()
+  })
+
+  it('requires manual transactions to finish before inline editing', async () => {
+    const driver = await setup()
+    await driver.beginTransaction()
+    await expect(driver.updateCell({
+      schema: 'public', table: 'items', column: 'label', value: 'edited',
+      originalValue: 'a', identity: { id: 1 },
+    })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
+    await driver.rollbackTransaction()
+    await driver.disconnect()
+  })
+
   it('keeps statements and scripts on one manual transaction until rollback', async () => {
     const driver = await setup()
     expect(driver.transactionStatus()).toEqual({ status: 'idle', startedAt: null })

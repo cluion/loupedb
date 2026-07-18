@@ -58,4 +58,37 @@ describe('browse API', async () => {
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.data.rows).toHaveLength(2)
   })
+
+  it('PATCH /cell updates exactly one row and rejects stale writes', async () => {
+    const updated = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
+      `/api/connections/${connId}/tables/public/items/cell`,
+      {
+        method: 'PATCH',
+        body: { column: 'label', value: 'edited', originalValue: 'a', identity: { id: 1 } },
+      },
+    )
+    expect(updated.ok).toBe(true)
+    if (updated.ok) expect(updated.data).toMatchObject({ affectedRows: 1, row: { id: 1, label: 'edited' } })
+
+    const stale = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/cell`, {
+      method: 'PATCH',
+      body: { column: 'label', value: 'lost update', originalValue: 'a', identity: { id: 1 } },
+    })
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.error.code).toBe('ROW_CHANGED')
+  })
+
+  it('PATCH /cell validates row identity and keeps primary keys read-only', async () => {
+    const missingIdentity = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/cell`, {
+      method: 'PATCH', body: { column: 'label', value: 'x', originalValue: 'edited', identity: {} },
+    })
+    expect(missingIdentity.ok).toBe(false)
+    if (!missingIdentity.ok) expect(missingIdentity.error.code).toBe('VALIDATION')
+
+    const primaryKey = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/cell`, {
+      method: 'PATCH', body: { column: 'id', value: 9, originalValue: 1, identity: { id: 1 } },
+    })
+    expect(primaryKey.ok).toBe(false)
+    if (!primaryKey.ok) expect(primaryKey.error.code).toBe('READ_ONLY_COLUMN')
+  })
 })

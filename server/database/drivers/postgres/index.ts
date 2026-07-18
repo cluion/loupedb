@@ -1,8 +1,8 @@
-import type { ConnectionConfig, ConnectionStatus, BrowseOpts, TransactionState } from '#shared/types'
+import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, TransactionState } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle, type PostgresSession } from './connection'
 import { listDatabases, listSchemas, listTables, listColumns, listFunctions, describeTable } from './schema'
-import { executeUnsafe, browseTable, type CancellableQuery } from './query'
+import { executeUnsafe, browseTable, updateTableCell, type CancellableQuery } from './query'
 import { cancelQuery, streamTable } from './stream'
 
 function withoutLeadingComments(source: string): string {
@@ -249,6 +249,19 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
     async browse(schema: string, table: string, opts: BrowseOpts, queryId?: string) {
       if (!handle) throw new Error('not connected')
       return handle.run((sql) => browseTable(sql, schema, table, opts, queryId, activeQueries, oidCache))
+    },
+
+    async updateCell(input: CellUpdateInput) {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!handle) throw new Error('not connected')
+        if (transaction) {
+          throw transactionError('TX_ACTIVE', 'finish the manual transaction before editing table data')
+        }
+        return await handle.run((sql) => updateTableCell(sql, input))
+      } finally {
+        unlock()
+      }
     },
 
     async cancel(queryId: string) {

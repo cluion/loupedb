@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **安全 Cell Inline Editing**：具 primary key 的資料表可雙擊非主鍵純量欄位編輯；寫入前顯示 parameterized `UPDATE` 與 bind values，確認後最多更新一列，並以原值條件阻止覆蓋並行變更；無主鍵、主鍵欄位、複雜型別及手動交易期間維持唯讀
+
 ## [0.10.0] - 2026-07-18
 
 ### Added

@@ -1,10 +1,14 @@
 import type postgres from 'postgres'
-import type { QueryResult, ColumnInfo, BrowseOpts, QueryMessage } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
 
 export interface CancellableQuery { cancel(): void }
+
+const INLINE_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
+  'integer', 'decimal', 'string', 'boolean', 'datetime', 'date', 'time', 'uuid', 'enum',
+])
 
 interface ErrorWithMessages {
   messages?: ReadonlyArray<QueryMessage>
@@ -36,6 +40,14 @@ async function oidToTypeName(sql: Sql, oid: number, oidCache: Map<number, string
 export function quoteIdent(name: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) throw new Error(`invalid identifier: ${name}`)
   return `"${name}"`
+}
+
+function editError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code, severity: 'ERROR' })
+}
+
+function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key)
 }
 
 interface RowListMeta {
@@ -107,4 +119,66 @@ export async function browseTable(
   const text = `select * from ${quoteIdent(schema)}.${quoteIdent(table)}${whereClause}${orderClause}`
     + ` limit $${params.length + 1} offset $${params.length + 2}`
   return executeUnsafe(sql, text, [...params, opts.limit, opts.offset], queryId, activeQueries, oidCache)
+}
+
+export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise<CellUpdateResult> {
+  const columnRows = await sql`
+    select c.udt_name as native,
+           c.is_updatable = 'YES' as is_updatable,
+           t.typtype as type_kind
+    from information_schema.columns c
+    join pg_type t on t.typname = c.udt_name
+    join pg_namespace tn on tn.oid = t.typnamespace and tn.nspname = c.udt_schema
+    where c.table_schema = ${input.schema}
+      and c.table_name = ${input.table}
+      and c.column_name = ${input.column}`
+  const column = columnRows[0]
+  if (!column || !column.is_updatable) {
+    throw editError('READ_ONLY_COLUMN', 'column is not available for inline editing')
+  }
+  const native = String(column.native)
+  const type = column.type_kind === 'e' ? 'enum' : normalizePgType(native)
+  if (!INLINE_EDIT_TYPES.has(type)) {
+    throw editError('READ_ONLY_COLUMN', `inline editing is not supported for ${native}`)
+  }
+
+  const pkRows = await sql`
+    select kcu.column_name as col from information_schema.table_constraints tc
+    join information_schema.key_column_usage kcu
+      on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
+    where tc.table_schema = ${input.schema} and tc.table_name = ${input.table}
+      and tc.constraint_type = 'PRIMARY KEY'
+    order by kcu.ordinal_position`
+  const primaryKey = pkRows.map((row) => String(row.col))
+  if (!primaryKey.length) {
+    throw editError('SAFE_EDIT_REQUIRED', 'table has no primary key and is read-only')
+  }
+  if (primaryKey.includes(input.column)) {
+    throw editError('READ_ONLY_COLUMN', 'primary key columns are read-only')
+  }
+  const identityKeys = Object.keys(input.identity)
+  if (
+    identityKeys.length !== primaryKey.length
+    || primaryKey.some((key) => !hasOwn(input.identity, key))
+    || identityKeys.some((key) => !primaryKey.includes(key))
+  ) {
+    throw editError('INVALID_IDENTITY', 'row identity must contain the complete primary key')
+  }
+
+  const params: unknown[] = [input.value]
+  const identityConditions = primaryKey.map((key) => {
+    params.push(input.identity[key])
+    return `${quoteIdent(key)} is not distinct from $${params.length}`
+  })
+  params.push(input.originalValue)
+  const originalCondition = `${quoteIdent(input.column)} is not distinct from $${params.length}`
+  const text = `update ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
+    + ` set ${quoteIdent(input.column)} = $1`
+    + ` where ${[...identityConditions, originalCondition].join(' and ')}`
+    + ' returning *'
+  const rows = await sql.unsafe(text, params as never[])
+  if (rows.length !== 1) {
+    throw editError('ROW_CHANGED', 'row changed or disappeared; reload before editing again')
+  }
+  return { affectedRows: 1, row: { ...rows[0] } }
 }

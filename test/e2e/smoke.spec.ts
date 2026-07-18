@@ -45,6 +45,18 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // data grid renders the table content end to end
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
 
+  // a scalar non-PK cell previews parameterized SQL and updates exactly one row
+  await expect(page.getByTestId('editability-status')).toContainText('可編輯')
+  await page.getByRole('cell', { name: 'x', exact: true }).dblclick()
+  await page.getByRole('textbox', { name: '編輯 label 第 1 列' }).fill('inline edited')
+  await page.getByRole('button', { name: '預覽寫入' }).click()
+  const writePreview = page.getByRole('dialog', { name: '確認資料寫入' })
+  await expect(writePreview).toContainText('UPDATE "public"."items"')
+  await expect(writePreview).toContainText('"id" IS NOT DISTINCT FROM $2')
+  await page.getByRole('button', { name: '確認寫入 1 列' }).click()
+  await expect(page.getByRole('status')).toContainText('已更新 1 列')
+  await expect(page.getByRole('cell', { name: 'inline edited', exact: true })).toBeVisible()
+
   // structure tab shows columns with pk badge
   await page.getByRole('button', { name: '結構' }).click()
   await expect(page.getByRole('cell', { name: 'PK' })).toBeVisible()
@@ -138,7 +150,7 @@ end $$;`)
   await page.getByRole('button', { name: 'Rollback 交易' }).click()
   await expect(page.getByTestId('transaction-status')).toHaveText('自動提交')
   await page.getByRole('button', { name: '執行', exact: true }).click()
-  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'inline edited', exact: true })).toBeVisible()
 
   // with two statements, only the one under the cursor runs (fill leaves the
   // cursor at the end, i.e. inside the second statement, which gets highlighted)
