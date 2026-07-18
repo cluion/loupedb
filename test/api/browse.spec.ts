@@ -25,6 +25,8 @@ describe('browse API', async () => {
     await seedSql.unsafe(`create table items (id serial primary key, label text, qty int)`).simple()
     await seedSql.unsafe(`insert into items (label, qty) values ('a', 1), ('b', 2), ('c', 3)`).simple()
     await seedSql.unsafe(`create table notes (label text)`).simple()
+    await seedSql.unsafe(`create table contacts (email text not null unique, label text)`).simple()
+    await seedSql.unsafe(`insert into contacts values ('a@example.com', 'A')`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -126,6 +128,37 @@ describe('browse API', async () => {
     if (deleted.ok) expect(deleted.data.row).toMatchObject({ id, label: 'inserted' })
   })
 
+  it('PATCH and DELETE accept a complete unique key identity', async () => {
+    const updated = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
+      `/api/connections/${connId}/tables/public/contacts/cell`,
+      {
+        method: 'PATCH',
+        body: {
+          column: 'label', value: 'edited', originalValue: 'A',
+          identity: { email: 'a@example.com' },
+        },
+      },
+    )
+    expect(updated.ok).toBe(true)
+
+    const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: {
+        schema: 'public', table: 'contacts',
+        opts: { limit: 1, offset: 0, filter: [{ column: 'email', op: '=', value: 'a@example.com' }] },
+      },
+    })
+    if (!browsed.ok) throw new Error('browse setup failed')
+    const deleted = await $fetch<Envelope<{ affectedRows: 1 }>>(
+      `/api/connections/${connId}/tables/public/contacts/rows`,
+      {
+        method: 'DELETE',
+        body: { identity: { email: 'a@example.com' }, version: browsed.data.rowVersions![0] },
+      },
+    )
+    expect(deleted.ok).toBe(true)
+  })
+
   it('DELETE /rows rejects a stale row version', async () => {
     const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
       method: 'POST',
@@ -146,7 +179,7 @@ describe('browse API', async () => {
     if (!stale.ok) expect(stale.error.code).toBe('ROW_CHANGED')
   })
 
-  it('allows insert but rejects delete on a table without a primary key', async () => {
+  it('allows insert but rejects delete on a table without a safe key', async () => {
     const inserted = await $fetch<Envelope<{ affectedRows: 1 }>>(
       `/api/connections/${connId}/tables/public/notes/rows`,
       { method: 'POST', body: { values: { label: 'note' } } },

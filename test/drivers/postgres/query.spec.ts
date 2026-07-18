@@ -59,6 +59,42 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('updates and deletes a row by a complete non-null unique key', async () => {
+    const driver = await setup()
+    await driver.execute('create table contacts (email text not null unique, label text)')
+    await driver.execute("insert into contacts values ('a@example.com', 'A')")
+
+    const updated = await driver.updateCell({
+      schema: 'public', table: 'contacts', column: 'label', value: 'edited',
+      originalValue: 'A', identity: { email: 'a@example.com' },
+    })
+    expect(updated).toMatchObject({ affectedRows: 1, row: { email: 'a@example.com', label: 'edited' } })
+    await expect(driver.updateCell({
+      schema: 'public', table: 'contacts', column: 'email', value: 'b@example.com',
+      originalValue: 'a@example.com', identity: { email: 'a@example.com' },
+    })).rejects.toMatchObject({ code: 'READ_ONLY_COLUMN' })
+
+    const browsed = await driver.browse('public', 'contacts', {
+      limit: 1, offset: 0, filter: [{ column: 'email', op: '=', value: 'a@example.com' }],
+    })
+    await expect(driver.deleteRow({
+      schema: 'public', table: 'contacts', identity: { email: 'a@example.com' },
+      version: browsed.rowVersions![0]!,
+    })).resolves.toMatchObject({ affectedRows: 1, row: { label: 'edited' } })
+    await driver.disconnect()
+  })
+
+  it('rejects NULL values from nullable unique keys as unsafe identities', async () => {
+    const driver = await setup()
+    await driver.execute('create table nullable_contacts (email text unique, label text)')
+    await driver.execute("insert into nullable_contacts values (null, 'A'), (null, 'B')")
+    await expect(driver.updateCell({
+      schema: 'public', table: 'nullable_contacts', column: 'label', value: 'edited',
+      originalValue: 'A', identity: { email: null },
+    })).rejects.toMatchObject({ code: 'INVALID_IDENTITY' })
+    await driver.disconnect()
+  })
+
   it('inserts and deletes one row using PK plus the browsed row version', async () => {
     const driver = await setup()
     const inserted = await driver.insertRow({
@@ -102,7 +138,7 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
-  it('keeps primary keys and tables without a primary key read-only', async () => {
+  it('keeps identity columns and tables without a safe key read-only', async () => {
     const driver = await setup()
     await expect(driver.updateCell({
       schema: 'public', table: 'items', column: 'id', value: 9,

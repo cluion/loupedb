@@ -25,7 +25,7 @@ export default defineEventHandler(async (event) => {
   }
   const identity = body.identity as Record<string, unknown>
   if (!Object.keys(identity).length || Object.values(identity).some((value) => !isScalar(value))) {
-    return invalid('identity must contain scalar primary key values')
+    return invalid('identity must contain scalar primary or unique key values')
   }
   const input: CellUpdateInput = {
     schema,

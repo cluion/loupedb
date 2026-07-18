@@ -79,6 +79,27 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '確認刪除 1 列' }).click()
   await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).not.toBeVisible()
 
+  // without a primary key, a complete non-NULL unique key still provides safe row identity
+  await page.getByRole('button', { name: 'contacts', exact: true }).click()
+  await expect(page.getByTestId('editability-status')).toContainText('unique key')
+  await page.getByRole('cell', { name: 'unique row', exact: true }).dblclick()
+  await page.getByRole('textbox', { name: '編輯 label 第 1 列' }).fill('unique edited')
+  await page.getByRole('button', { name: '預覽寫入' }).click()
+  await expect(page.getByRole('dialog', { name: '確認資料寫入' })).toContainText(
+    '"email" IS NOT DISTINCT FROM $2',
+  )
+  await page.getByRole('button', { name: '確認寫入 1 列' }).click()
+  await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).toBeVisible()
+  const contactsGrid = page.locator('.grid').first()
+  await contactsGrid.getByRole('row').filter({ hasText: 'unique edited' }).getByRole('button', { name: /刪除/ }).click()
+  await expect(page.getByRole('dialog', { name: '確認刪除資料列' })).toContainText(
+    '"email" IS NOT DISTINCT FROM $1',
+  )
+  await page.getByRole('button', { name: '確認刪除 1 列' }).click()
+  await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'items', exact: true }).click()
+
   // structure tab shows columns with pk badge
   await page.getByRole('button', { name: '結構' }).click()
   await expect(page.getByRole('cell', { name: 'PK' })).toBeVisible()

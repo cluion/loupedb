@@ -1,5 +1,5 @@
 import type postgres from 'postgres'
-import type { DatabaseFunctionInfo, DatabaseInfo, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo } from '#shared/types'
+import type { DatabaseFunctionInfo, DatabaseInfo, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, ColumnInfo, ForeignKeyInfo, UniqueKeyInfo } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
@@ -63,6 +63,37 @@ export async function listFunctions(sql: Sql, schema: string): Promise<ReadonlyA
   }))
 }
 
+export async function listUniqueKeys(sql: Sql, schema: string, table: string): Promise<ReadonlyArray<UniqueKeyInfo>> {
+  const rows = await sql`
+    select index_class.relname as name,
+           attribute.attname as col
+    from pg_class table_class
+    join pg_namespace namespace on namespace.oid = table_class.relnamespace
+    join pg_index index_meta on index_meta.indrelid = table_class.oid
+    join pg_class index_class on index_class.oid = index_meta.indexrelid
+    join lateral unnest(index_meta.indkey) with ordinality as key_column(attnum, position)
+      on key_column.position <= index_meta.indnkeyatts
+    join pg_attribute attribute
+      on attribute.attrelid = table_class.oid and attribute.attnum = key_column.attnum
+    where namespace.nspname = ${schema}
+      and table_class.relname = ${table}
+      and index_meta.indisunique
+      and not index_meta.indisprimary
+      and index_meta.indisvalid
+      and index_meta.indisready
+      and index_meta.indpred is null
+      and index_meta.indexprs is null
+    order by index_class.relname, key_column.position`
+  const keys = new Map<string, string[]>()
+  for (const row of rows) {
+    const name = String(row.name)
+    const columns = keys.get(name) ?? []
+    columns.push(String(row.col))
+    keys.set(name, columns)
+  }
+  return [...keys].map(([name, columns]) => ({ name, columns }))
+}
+
 export async function describeTable(sql: Sql, schema: string, table: string): Promise<TableSchema> {
   // udt_name gives pg internal type names (int4, timestamptz, _int4 for arrays)
   // pg_type.typtype = 'e' marks custom enum types
@@ -98,6 +129,7 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
       and tc.constraint_type = 'PRIMARY KEY'
     order by kcu.ordinal_position`
   const primaryKey = pkRows.map((r) => String(r.col))
+  const uniqueKeys = await listUniqueKeys(sql, schema, table)
 
   const fkRows = await sql`
     select con.conname as name, pg_get_constraintdef(con.oid) as def
@@ -107,7 +139,7 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
     where n.nspname = ${schema} and cls.relname = ${table} and con.contype = 'f'`
   const foreignKeys: ForeignKeyInfo[] = fkRows.map((r) => parseFkDef(String(r.name), String(r.def), schema))
 
-  return { schema, table, columns, primaryKey, foreignKeys }
+  return { schema, table, columns, primaryKey, uniqueKeys, foreignKeys }
 }
 
 // parses pg_get_constraintdef output like:

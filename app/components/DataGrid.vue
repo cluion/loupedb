@@ -152,18 +152,37 @@ function isScalar(value: unknown): boolean {
   return value === null || ['string', 'number', 'boolean'].includes(typeof value)
 }
 
-function identityFor(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return Object.fromEntries((tableInfo.value?.primaryKey ?? []).map((key) => [key, row[key]]))
+interface SafeRowIdentity {
+  readonly columns: ReadonlyArray<string>
+  readonly values: Readonly<Record<string, unknown>>
+}
+
+function identityFor(row: Readonly<Record<string, unknown>>): SafeRowIdentity | null {
+  const primaryKey = tableInfo.value?.primaryKey ?? []
+  if (primaryKey.length && primaryKey.every((column) => isScalar(row[column]) && row[column] !== null)) {
+    return {
+      columns: primaryKey,
+      values: Object.fromEntries(primaryKey.map((column) => [column, row[column]])),
+    }
+  }
+  for (const key of tableInfo.value?.uniqueKeys ?? []) {
+    if (key.columns.length && key.columns.every((column) => isScalar(row[column]) && row[column] !== null)) {
+      return {
+        columns: key.columns,
+        values: Object.fromEntries(key.columns.map((column) => [column, row[column]])),
+      }
+    }
+  }
+  return null
 }
 
 function canEditCell(column: ColumnInfo, row: Readonly<Record<string, unknown>>): boolean {
-  const primaryKey = tableInfo.value?.primaryKey ?? []
+  const identity = identityFor(row)
   const schemaColumn = tableInfo.value?.columns.find((candidate) => candidate.name === column.name)
-  return primaryKey.length > 0
-    && !primaryKey.includes(column.name)
+  return identity !== null
+    && !identity.columns.includes(column.name)
     && schemaColumn?.editable !== false
     && INLINE_EDIT_TYPES.has(column.type)
-    && primaryKey.every((key) => isScalar(row[key]))
 }
 
 function displayValue(value: unknown): string {
@@ -174,13 +193,15 @@ function displayValue(value: unknown): string {
 
 function beginEdit(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
   if (!canEditCell(column, row) || saving.value) return
+  const identity = identityFor(row)
+  if (!identity) return
   closeWritePanels()
   const originalValue = row[column.name]
   editor.value = {
     rowIndex,
     column: column.name,
     originalValue,
-    identity: identityFor(row),
+    identity: identity.values,
     value: originalValue === null ? '' : displayValue(originalValue),
     useNull: originalValue === null,
   }
@@ -256,7 +277,10 @@ function startInsert(source?: Readonly<Record<string, unknown>>) {
   if (!tableInfo.value || saving.value) return
   closeWritePanels()
   notice.value = null
-  const primaryKey = tableInfo.value.primaryKey
+  const keyColumns = new Set([
+    ...tableInfo.value.primaryKey,
+    ...tableInfo.value.uniqueKeys.flatMap((key) => key.columns),
+  ])
   const fields = tableInfo.value.columns
     .filter((column) => column.insertable !== false && INLINE_EDIT_TYPES.has(column.type))
     .map((column): InsertField => {
@@ -267,7 +291,7 @@ function startInsert(source?: Readonly<Record<string, unknown>>) {
           value: '',
         }
       }
-      if (primaryKey.includes(column.name)) {
+      if (keyColumns.has(column.name)) {
         return {
           column,
           mode: column.defaultValue !== undefined ? 'default' : 'value',
@@ -331,19 +355,19 @@ async function confirmInsert() {
 }
 
 function canDeleteRow(row: Readonly<Record<string, unknown>>, rowIndex: number): boolean {
-  const primaryKey = tableInfo.value?.primaryKey ?? []
   const version = result.value?.rowVersions?.[rowIndex]
-  return primaryKey.length > 0
-    && primaryKey.every((key) => isScalar(row[key]))
+  return identityFor(row) !== null
     && typeof version === 'string'
     && /^\d+$/u.test(version)
 }
 
 function prepareDelete(row: Readonly<Record<string, unknown>>, rowIndex: number) {
   if (!canDeleteRow(row, rowIndex) || saving.value) return
+  const safeIdentity = identityFor(row)
+  if (!safeIdentity) return
   closeWritePanels()
   notice.value = null
-  const identity = identityFor(row)
+  const identity = safeIdentity.values
   const identityEntries = Object.entries(identity)
   const version = result.value!.rowVersions![rowIndex]!
   const params = [...identityEntries.map(([, value]) => value), version]
@@ -390,8 +414,9 @@ async function confirmDelete() {
     <div v-if="error" role="alert">{{ error }}</div>
     <div v-if="metadataError" role="alert">{{ metadataError }}</div>
     <p v-if="tableInfo" class="editability" data-testid="editability-status">
-      <template v-if="tableInfo.primaryKey.length">可編輯：雙擊非主鍵的純量欄位</template>
-      <template v-else>無 primary key：可新增或 Clone，但既有資料唯讀且不可刪除</template>
+      <template v-if="tableInfo.primaryKey.length">可編輯：使用 primary key 安全定位；雙擊非鍵純量欄位</template>
+      <template v-else-if="tableInfo.uniqueKeys.length">可編輯：使用 unique key 安全定位；NULL 唯一鍵資料列維持唯讀</template>
+      <template v-else>無 primary key 或 unique key：可新增或 Clone，但既有資料唯讀且不可刪除</template>
     </p>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="writeError" class="write-error" role="alert">{{ writeError }}</p>
@@ -544,7 +569,7 @@ async function confirmDelete() {
     </section>
     <section v-if="pendingDelete" class="write-preview delete-preview" role="dialog" aria-label="確認刪除資料列">
       <strong>確認刪除 1 列</strong>
-      <p>刪除只會在完整 primary key 與 row version 都仍相符時執行。</p>
+      <p>刪除只會在完整 primary key／unique key 與 row version 都仍相符時執行。</p>
       <pre>{{ pendingDelete.sql }}</pre>
       <ol>
         <li v-for="(param, index) in pendingDelete.params" :key="index">

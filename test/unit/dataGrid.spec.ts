@@ -52,7 +52,7 @@ beforeEach(() => {
         { ...result([]).data.columns[0]!, editable: true, insertable: true, defaultValue: "nextval('items_id_seq')" },
         { ...result([]).data.columns[1]!, nullable: false, editable: true, insertable: true },
       ],
-      primaryKey: ['id'], foreignKeys: [],
+      primaryKey: ['id'], uniqueKeys: [], foreignKeys: [],
     },
   })
   updateCellMock.mockReset()
@@ -157,12 +157,63 @@ describe('DataGrid', () => {
     await vi.waitFor(() => expect(w.text()).toContain('已更新 1 列'))
   })
 
-  it('keeps every cell read-only when the table has no primary key', async () => {
+  it('uses a non-null unique key to edit and delete rows without a primary key', async () => {
+    describeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        schema: 'public', table: 'items',
+        columns: [
+          { ...result([]).data.columns[0]!, editable: true, insertable: true },
+          { ...result([]).data.columns[1]!, editable: true, insertable: true },
+        ],
+        primaryKey: [],
+        uniqueKeys: [{ name: 'items_label_key', columns: ['label'] }],
+        foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.get('[data-testid="editability-status"]').text()).toContain('unique key'))
+
+    await w.findAll('td')[0]!.trigger('dblclick')
+    await w.get('[aria-label="編輯 id 第 1 列"]').setValue('2')
+    await w.findAll('button').find(button => button.text() === '預覽寫入')!.trigger('click')
+    expect(w.get('[aria-label="確認資料寫入"] pre').text()).toContain('"label" IS NOT DISTINCT FROM $2')
+    await w.findAll('button').find(button => button.text() === '確認寫入 1 列')!.trigger('click')
+    await vi.waitFor(() => expect(updateCellMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', column: 'id', value: '2',
+      originalValue: 1, identity: { label: 'a' },
+    }))
+
+    await w.get('[aria-label="刪除第 1 列"]').trigger('click')
+    expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('"label" IS NOT DISTINCT FROM $1')
+    await w.findAll('button').find(button => button.text() === '確認刪除 1 列')!.trigger('click')
+    await vi.waitFor(() => expect(deleteRowMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', identity: { label: 'a' }, version: '10',
+    }))
+  })
+
+  it('keeps a row with a NULL unique key read-only', async () => {
+    browseMock.mockResolvedValueOnce(result([{ id: 1, label: null }]) as never)
     describeMock.mockResolvedValueOnce({
       ok: true,
       data: {
         schema: 'public', table: 'items', columns: result([]).data.columns,
-        primaryKey: [], foreignKeys: [],
+        primaryKey: [], uniqueKeys: [{ name: 'items_label_key', columns: ['label'] }], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.findAll('td')[0]!.trigger('dblclick')
+    expect(w.find('[aria-label="編輯 id 第 1 列"]').exists()).toBe(false)
+    expect(w.get('[aria-label="刪除第 1 列"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps every existing row read-only when the table has no safe key', async () => {
+    describeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        schema: 'public', table: 'items', columns: result([]).data.columns,
+        primaryKey: [], uniqueKeys: [], foreignKeys: [],
       },
     })
     const w = await mountSuspended(DataGrid, { props })
@@ -195,6 +246,24 @@ describe('DataGrid', () => {
     await w.get('[aria-label="Clone 第 1 列"]').trigger('click')
     expect((w.get('[aria-label="id 輸入方式"]').element as HTMLSelectElement).value).toBe('default')
     expect((w.get('[aria-label="label 的值"]').element as HTMLInputElement).value).toBe('a')
+  })
+
+  it('clears unique key columns when cloning a row without a primary key', async () => {
+    describeMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        schema: 'public', table: 'items',
+        columns: [
+          { ...result([]).data.columns[0]!, editable: true, insertable: true },
+          { ...result([]).data.columns[1]!, nullable: false, editable: true, insertable: true },
+        ],
+        primaryKey: [], uniqueKeys: [{ name: 'items_label_key', columns: ['label'] }], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.find('[aria-label="Clone 第 1 列"]').exists()).toBe(true))
+    await w.get('[aria-label="Clone 第 1 列"]').trigger('click')
+    expect((w.get('[aria-label="label 的值"]').element as HTMLInputElement).value).toBe('')
   })
 
   it('previews and deletes one row by PK and row version', async () => {

@@ -96,11 +96,16 @@ export interface ForeignKeyInfo {
   readonly referencesTable: string
   readonly referencesColumns: ReadonlyArray<string>
 }
+export interface UniqueKeyInfo {
+  readonly name: string
+  readonly columns: ReadonlyArray<string>
+}
 export interface TableSchema {
   readonly schema: string
   readonly table: string
   readonly columns: ReadonlyArray<ColumnInfo>
   readonly primaryKey: ReadonlyArray<string>
+  readonly uniqueKeys: ReadonlyArray<UniqueKeyInfo>
   readonly foreignKeys: ReadonlyArray<ForeignKeyInfo>
 }
 

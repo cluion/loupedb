@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Unique Key 安全資料列定位**：沒有 primary key 的資料表可改用完整、非 NULL 的 PostgreSQL unique index 定位資料列，支援 inline editing 與搭配 `xmin` 的安全刪除；partial、expression、無效 index 與含 NULL 的唯一鍵值維持唯讀，Clone 會清空 unique key 欄位以避免衝突
+
 ## [0.12.0] - 2026-07-18
 
 ### Added

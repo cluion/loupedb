@@ -1,6 +1,7 @@
 import type postgres from 'postgres'
 import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
+import { listUniqueKeys } from './schema'
 
 type Sql = ReturnType<typeof postgres>
 
@@ -93,20 +94,44 @@ async function primaryKeyColumns(sql: Sql, schema: string, table: string): Promi
   return rows.map((row) => String(row.col))
 }
 
-function identityConditions(
-  identity: Readonly<Record<string, unknown>>, primaryKey: ReadonlyArray<string>, params: unknown[],
-): string[] {
-  const identityKeys = Object.keys(identity)
-  if (
-    identityKeys.length !== primaryKey.length
-    || primaryKey.some((key) => !hasOwn(identity, key))
-    || identityKeys.some((key) => !primaryKey.includes(key))
-  ) {
-    throw editError('INVALID_IDENTITY', 'row identity must contain the complete primary key')
+interface IdentityKey {
+  readonly kind: 'primary key' | 'unique key'
+  readonly columns: ReadonlyArray<string>
+}
+
+async function identityKey(
+  sql: Sql, schema: string, table: string, identity: Readonly<Record<string, unknown>>,
+): Promise<IdentityKey> {
+  const primaryKey = await primaryKeyColumns(sql, schema, table)
+  const uniqueKeys = await listUniqueKeys(sql, schema, table)
+  const keys: IdentityKey[] = [
+    ...(primaryKey.length ? [{ kind: 'primary key' as const, columns: primaryKey }] : []),
+    ...uniqueKeys.map((key) => ({ kind: 'unique key' as const, columns: key.columns })),
+  ]
+  if (!keys.length) {
+    throw editError('SAFE_EDIT_REQUIRED', 'table has no primary or unique key and is read-only')
   }
-  return primaryKey.map((key) => {
-    params.push(identity[key])
-    return `${quoteIdent(key)} is not distinct from $${params.length}`
+  const identityKeys = Object.keys(identity)
+  const key = keys.find((candidate) => (
+    identityKeys.length === candidate.columns.length
+    && candidate.columns.every((column) => hasOwn(identity, column))
+    && identityKeys.every((column) => candidate.columns.includes(column))
+  ))
+  if (!key) {
+    throw editError('INVALID_IDENTITY', 'row identity must contain one complete primary or unique key')
+  }
+  if (key.kind === 'unique key' && key.columns.some((column) => identity[column] === null)) {
+    throw editError('INVALID_IDENTITY', 'NULL unique key values cannot safely identify one row')
+  }
+  return key
+}
+
+function identityConditions(
+  identity: Readonly<Record<string, unknown>>, key: IdentityKey, params: unknown[],
+): string[] {
+  return key.columns.map((column) => {
+    params.push(identity[column])
+    return `${quoteIdent(column)} is not distinct from $${params.length}`
   })
 }
 
@@ -205,16 +230,13 @@ export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise
     throw editError('READ_ONLY_COLUMN', `inline editing is not supported for ${column.native}`)
   }
 
-  const primaryKey = await primaryKeyColumns(sql, input.schema, input.table)
-  if (!primaryKey.length) {
-    throw editError('SAFE_EDIT_REQUIRED', 'table has no primary key and is read-only')
-  }
-  if (primaryKey.includes(input.column)) {
-    throw editError('READ_ONLY_COLUMN', 'primary key columns are read-only')
+  const key = await identityKey(sql, input.schema, input.table, input.identity)
+  if (key.columns.includes(input.column)) {
+    throw editError('READ_ONLY_COLUMN', 'row identity columns are read-only')
   }
 
   const params: unknown[] = [input.value]
-  const rowConditions = identityConditions(input.identity, primaryKey, params)
+  const rowConditions = identityConditions(input.identity, key, params)
   params.push(input.originalValue)
   const originalCondition = `${quoteIdent(input.column)} is not distinct from $${params.length}`
   const text = `update ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
@@ -254,12 +276,9 @@ export async function insertTableRow(sql: Sql, input: RowInsertInput): Promise<R
 
 export async function deleteTableRow(sql: Sql, input: RowDeleteInput): Promise<RowMutationResult> {
   if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
-  const primaryKey = await primaryKeyColumns(sql, input.schema, input.table)
-  if (!primaryKey.length) {
-    throw editError('SAFE_EDIT_REQUIRED', 'table has no primary key and rows cannot be deleted')
-  }
+  const key = await identityKey(sql, input.schema, input.table, input.identity)
   const params: unknown[] = []
-  const conditions = identityConditions(input.identity, primaryKey, params)
+  const conditions = identityConditions(input.identity, key, params)
   params.push(input.version)
   conditions.push(`xmin::text = $${params.length}`)
   const text = `delete from ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`

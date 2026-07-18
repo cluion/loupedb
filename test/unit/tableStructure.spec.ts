@@ -13,6 +13,7 @@ const schema: TableSchema = {
     { name: 'owner_id', nativeType: 'int4', type: 'integer', nullable: true },
   ],
   primaryKey: ['id'],
+  uniqueKeys: [],
   foreignKeys: [{
     name: 'todos_owner_fk', columns: ['owner_id'],
     referencesSchema: 'public', referencesTable: 'users', referencesColumns: ['id'],

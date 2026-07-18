@@ -27,6 +27,19 @@ async function setup(): Promise<DatabaseDriver> {
     id serial primary key,
     author_id int not null references app.users (id)
   )`).simple()
+  await seedSql.unsafe(`create table app.accounts (
+    tenant_id int not null,
+    email text not null,
+    display_name text,
+    external_id text,
+    unique (tenant_id, email)
+  )`).simple()
+  await seedSql.unsafe(`create unique index accounts_external_id_unique
+    on app.accounts (external_id)`).simple()
+  await seedSql.unsafe(`create unique index accounts_display_name_partial
+    on app.accounts (display_name) where display_name is not null`).simple()
+  await seedSql.unsafe(`create unique index accounts_lower_email_expression
+    on app.accounts (lower(email))`).simple()
   await seedSql.unsafe(`create function app.user_label(user_id integer)
     returns text language sql stable as $$ select 'user-' || user_id::text $$`).simple()
   await seedSql.unsafe(`create function app.user_label(user_id bigint)
@@ -115,6 +128,13 @@ describe('postgres driver schema exploration', () => {
       referencesTable: 'users',
       referencesColumns: ['id'],
     })
+
+    const accounts = await driver.describeTable('app', 'accounts')
+    expect(accounts.primaryKey).toEqual([])
+    expect(accounts.uniqueKeys).toEqual([
+      { name: 'accounts_external_id_unique', columns: ['external_id'] },
+      { name: 'accounts_tenant_id_email_key', columns: ['tenant_id', 'email'] },
+    ])
     await driver.disconnect()
   })
 })
