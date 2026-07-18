@@ -9,6 +9,7 @@ export interface ColumnInfo {
   readonly type: NormalizedType
   readonly nullable: boolean
   readonly editable?: boolean
+  readonly insertable?: boolean
   readonly defaultValue?: unknown
 }
 
@@ -31,6 +32,7 @@ export interface QueryResult {
   readonly affectedRows?: number
   readonly executionMs: number
   readonly messages?: ReadonlyArray<QueryMessage>
+  readonly rowVersions?: ReadonlyArray<string>
 }
 
 export type TransactionStatus = 'idle' | 'active' | 'failed'
@@ -120,6 +122,24 @@ export interface CellUpdateInput {
 }
 
 export interface CellUpdateResult {
+  readonly affectedRows: 1
+  readonly row: Readonly<Record<string, unknown>>
+}
+
+export interface RowInsertInput {
+  readonly schema: string
+  readonly table: string
+  readonly values: Readonly<Record<string, unknown>>
+}
+
+export interface RowDeleteInput {
+  readonly schema: string
+  readonly table: string
+  readonly identity: Readonly<Record<string, unknown>>
+  readonly version: string
+}
+
+export interface RowMutationResult {
   readonly affectedRows: 1
   readonly row: Readonly<Record<string, unknown>>
 }

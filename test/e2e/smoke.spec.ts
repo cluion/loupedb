@@ -57,6 +57,28 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await expect(page.getByRole('status')).toContainText('已更新 1 列')
   await expect(page.getByRole('cell', { name: 'inline edited', exact: true })).toBeVisible()
 
+  // insert, Clone and delete reuse parameterized previews; delete also checks xmin
+  await page.getByRole('button', { name: '新增資料列' }).click()
+  await page.getByRole('textbox', { name: 'label 的值' }).fill('added row')
+  await page.getByRole('button', { name: '預覽新增' }).click()
+  const insertPreview = page.getByRole('dialog', { name: '確認新增資料列' })
+  await expect(insertPreview).toContainText('INSERT INTO "public"."items" ("label")')
+  await page.getByRole('button', { name: '確認新增 1 列' }).click()
+  await expect(page.getByRole('cell', { name: 'added row', exact: true })).toBeVisible()
+
+  const dataGrid = page.locator('.grid').first()
+  await dataGrid.getByRole('row').filter({ hasText: 'added row' }).getByRole('button', { name: /Clone/ }).click()
+  await page.getByRole('textbox', { name: 'label 的值' }).fill('cloned row')
+  await page.getByRole('button', { name: '預覽新增' }).click()
+  await page.getByRole('button', { name: '確認新增 1 列' }).click()
+  await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).toBeVisible()
+
+  await dataGrid.getByRole('row').filter({ hasText: 'cloned row' }).getByRole('button', { name: /刪除/ }).click()
+  const deletePreview = page.getByRole('dialog', { name: '確認刪除資料列' })
+  await expect(deletePreview).toContainText('xmin::text')
+  await page.getByRole('button', { name: '確認刪除 1 列' }).click()
+  await expect(page.getByRole('cell', { name: 'cloned row', exact: true })).not.toBeVisible()
+
   // structure tab shows columns with pk badge
   await page.getByRole('button', { name: '結構' }).click()
   await expect(page.getByRole('cell', { name: 'PK' })).toBeVisible()

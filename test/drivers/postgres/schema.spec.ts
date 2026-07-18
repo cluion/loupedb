@@ -102,6 +102,7 @@ describe('postgres driver schema exploration', () => {
     expect(col('id')?.type).toBe('integer')
     expect(col('name')?.nullable).toBe(false)
     expect(col('name')?.editable).toBe(true)
+    expect(col('name')?.insertable).toBe(true)
     expect(col('data')?.type).toBe('json')
     expect(col('fav')?.type).toBe('enum') // custom enum resolved via pg_type kind
     expect(col('created')?.type).toBe('datetime')

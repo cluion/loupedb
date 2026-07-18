@@ -24,6 +24,7 @@ describe('browse API', async () => {
     })
     await seedSql.unsafe(`create table items (id serial primary key, label text, qty int)`).simple()
     await seedSql.unsafe(`insert into items (label, qty) values ('a', 1), ('b', 2), ('c', 3)`).simple()
+    await seedSql.unsafe(`create table notes (label text)`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -44,7 +45,11 @@ describe('browse API', async () => {
       body: { schema: 'public', table: 'items', opts: { limit: 2, offset: 1, orderBy: 'id', orderDir: 'asc' } },
     })
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.data.rows.map(x => x.label)).toEqual(['b', 'c'])
+    if (r.ok) {
+      expect(r.data.rows.map(x => x.label)).toEqual(['b', 'c'])
+      expect(r.data.rowVersions).toHaveLength(2)
+      expect(r.data.columns.map((column) => column.name)).not.toContain('__loupedb_xmin')
+    }
   })
 
   it('POST /browse applies parameterized filter', async () => {
@@ -90,5 +95,81 @@ describe('browse API', async () => {
     })
     expect(primaryKey.ok).toBe(false)
     if (!primaryKey.ok) expect(primaryKey.error.code).toBe('READ_ONLY_COLUMN')
+  })
+
+  it('POST and DELETE /rows insert then safely delete by PK and row version', async () => {
+    const inserted = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
+      `/api/connections/${connId}/tables/public/items/rows`,
+      { method: 'POST', body: { values: { label: 'inserted', qty: 9 } } },
+    )
+    expect(inserted.ok).toBe(true)
+    if (!inserted.ok) return
+    const id = inserted.data.row.id
+    const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: {
+        schema: 'public', table: 'items',
+        opts: { limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: id }] },
+      },
+    })
+    expect(browsed.ok).toBe(true)
+    if (!browsed.ok) return
+
+    const deleted = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
+      `/api/connections/${connId}/tables/public/items/rows`,
+      {
+        method: 'DELETE',
+        body: { identity: { id }, version: browsed.data.rowVersions![0] },
+      },
+    )
+    expect(deleted.ok).toBe(true)
+    if (deleted.ok) expect(deleted.data.row).toMatchObject({ id, label: 'inserted' })
+  })
+
+  it('DELETE /rows rejects a stale row version', async () => {
+    const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: {
+        schema: 'public', table: 'items',
+        opts: { limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: 2 }] },
+      },
+    })
+    if (!browsed.ok) throw new Error('browse setup failed')
+    await $fetch(`/api/connections/${connId}/tables/public/items/cell`, {
+      method: 'PATCH',
+      body: { column: 'label', value: 'newer', originalValue: 'b', identity: { id: 2 } },
+    })
+    const stale = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/rows`, {
+      method: 'DELETE', body: { identity: { id: 2 }, version: browsed.data.rowVersions![0] },
+    })
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.error.code).toBe('ROW_CHANGED')
+  })
+
+  it('allows insert but rejects delete on a table without a primary key', async () => {
+    const inserted = await $fetch<Envelope<{ affectedRows: 1 }>>(
+      `/api/connections/${connId}/tables/public/notes/rows`,
+      { method: 'POST', body: { values: { label: 'note' } } },
+    )
+    expect(inserted.ok).toBe(true)
+    const deleted = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/notes/rows`, {
+      method: 'DELETE', body: { identity: { label: 'note' }, version: '1' },
+    })
+    expect(deleted.ok).toBe(false)
+    if (!deleted.ok) expect(deleted.error.code).toBe('SAFE_EDIT_REQUIRED')
+  })
+
+  it('validates row mutation values and row versions', async () => {
+    const complexValue = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/rows`, {
+      method: 'POST', body: { values: { label: { nested: true } } },
+    })
+    expect(complexValue.ok).toBe(false)
+    if (!complexValue.ok) expect(complexValue.error.code).toBe('VALIDATION')
+
+    const invalidVersion = await $fetch<Envelope<never>>(`/api/connections/${connId}/tables/public/items/rows`, {
+      method: 'DELETE', body: { identity: { id: 1 }, version: 'not-an-xmin' },
+    })
+    expect(invalidVersion.ok).toBe(false)
+    if (!invalidVersion.ok) expect(invalidVersion.error.code).toBe('VALIDATION')
   })
 })

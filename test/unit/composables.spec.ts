@@ -108,6 +108,24 @@ describe('useQuery', () => {
     })
   })
 
+  it('insertRow posts provided values to the encoded table route', async () => {
+    await useQuery('c1').insertRow({
+      schema: 'public', table: 'daily items', values: { label: 'new', qty: null },
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables/public/daily%20items/rows', {
+      method: 'POST', body: { values: { label: 'new', qty: null } },
+    })
+  })
+
+  it('deleteRow sends the complete identity and row version', async () => {
+    await useQuery('c1').deleteRow({
+      schema: 'public', table: 'daily items', identity: { id: 7 }, version: '42',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/tables/public/daily%20items/rows', {
+      method: 'DELETE', body: { identity: { id: 7 }, version: '42' },
+    })
+  })
+
   it('cancel posts queryId', async () => {
     await useQuery('c1').cancel('q9')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/cancel', {

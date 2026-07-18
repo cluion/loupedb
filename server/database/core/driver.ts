@@ -1,4 +1,4 @@
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ConnectionConfig, ConnectionStatus, DatabaseFunctionInfo, DatabaseInfo, QueryResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, TransactionState } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ConnectionConfig, ConnectionStatus, DatabaseFunctionInfo, DatabaseInfo, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, SchemaInfo, TableColumnInfo, TableInfo, TableSchema, TransactionState } from '#shared/types'
 
 export interface DatabaseDriver {
   readonly config: ConnectionConfig
@@ -19,6 +19,8 @@ export interface DatabaseDriver {
   rollbackTransaction(): Promise<TransactionState>
   browse(schema: string, table: string, opts: BrowseOpts, queryId?: string): Promise<QueryResult>
   updateCell(input: CellUpdateInput): Promise<CellUpdateResult>
+  insertRow(input: RowInsertInput): Promise<RowMutationResult>
+  deleteRow(input: RowDeleteInput): Promise<RowMutationResult>
   cancel(queryId: string): Promise<void>
   stream(schema: string, table: string, opts: BrowseOpts, batchSize: number, queryId?: string): AsyncIterable<ReadonlyArray<Record<string, unknown>>>
 }

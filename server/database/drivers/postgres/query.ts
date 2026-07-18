@@ -1,5 +1,5 @@
 import type postgres from 'postgres'
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult } from '#shared/types'
+import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
 import { normalizePgType } from '../../core/normalizer'
 
 type Sql = ReturnType<typeof postgres>
@@ -48,6 +48,66 @@ function editError(code: string, message: string): Error {
 
 function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key)
+}
+
+interface TableColumnMetadata {
+  readonly name: string
+  readonly native: string
+  readonly type: NormalizedType
+  readonly updatable: boolean
+  readonly insertable: boolean
+}
+
+async function tableColumnMetadata(sql: Sql, schema: string, table: string): Promise<TableColumnMetadata[]> {
+  const rows = await sql`
+    select c.column_name as name,
+           c.udt_name as native,
+           c.is_updatable = 'YES' as is_updatable,
+           c.is_generated = 'NEVER' and c.is_identity = 'NO' as is_insertable,
+           t.typtype as type_kind
+    from information_schema.columns c
+    join pg_type t on t.typname = c.udt_name
+    join pg_namespace tn on tn.oid = t.typnamespace and tn.nspname = c.udt_schema
+    where c.table_schema = ${schema} and c.table_name = ${table}
+    order by c.ordinal_position`
+  return rows.map((row) => {
+    const native = String(row.native)
+    return {
+      name: String(row.name),
+      native,
+      type: row.type_kind === 'e' ? 'enum' : normalizePgType(native),
+      updatable: Boolean(row.is_updatable),
+      insertable: Boolean(row.is_insertable),
+    }
+  })
+}
+
+async function primaryKeyColumns(sql: Sql, schema: string, table: string): Promise<string[]> {
+  const rows = await sql`
+    select kcu.column_name as col from information_schema.table_constraints tc
+    join information_schema.key_column_usage kcu
+      on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
+    where tc.table_schema = ${schema} and tc.table_name = ${table}
+      and tc.constraint_type = 'PRIMARY KEY'
+    order by kcu.ordinal_position`
+  return rows.map((row) => String(row.col))
+}
+
+function identityConditions(
+  identity: Readonly<Record<string, unknown>>, primaryKey: ReadonlyArray<string>, params: unknown[],
+): string[] {
+  const identityKeys = Object.keys(identity)
+  if (
+    identityKeys.length !== primaryKey.length
+    || primaryKey.some((key) => !hasOwn(identity, key))
+    || identityKeys.some((key) => !primaryKey.includes(key))
+  ) {
+    throw editError('INVALID_IDENTITY', 'row identity must contain the complete primary key')
+  }
+  return primaryKey.map((key) => {
+    params.push(identity[key])
+    return `${quoteIdent(key)} is not distinct from $${params.length}`
+  })
 }
 
 interface RowListMeta {
@@ -116,69 +176,97 @@ export async function browseTable(
   }
 
   const whereClause = where.length ? ` where ${where.join(' and ')}` : ''
-  const text = `select * from ${quoteIdent(schema)}.${quoteIdent(table)}${whereClause}${orderClause}`
+  let versionColumn = '__loupedb_xmin'
+  while (validCols.has(versionColumn)) versionColumn += '_'
+  const text = `select *, xmin::text as ${quoteIdent(versionColumn)}`
+    + ` from ${quoteIdent(schema)}.${quoteIdent(table)}${whereClause}${orderClause}`
     + ` limit $${params.length + 1} offset $${params.length + 2}`
-  return executeUnsafe(sql, text, [...params, opts.limit, opts.offset], queryId, activeQueries, oidCache)
+  const result = await executeUnsafe(
+    sql, text, [...params, opts.limit, opts.offset], queryId, activeQueries, oidCache,
+  )
+  return {
+    ...result,
+    columns: result.columns.filter((column) => column.name !== versionColumn),
+    rows: result.rows.map((row) => {
+      const { [versionColumn]: _version, ...data } = row
+      return data
+    }),
+    rowVersions: result.rows.map((row) => String(row[versionColumn])),
+  }
 }
 
 export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise<CellUpdateResult> {
-  const columnRows = await sql`
-    select c.udt_name as native,
-           c.is_updatable = 'YES' as is_updatable,
-           t.typtype as type_kind
-    from information_schema.columns c
-    join pg_type t on t.typname = c.udt_name
-    join pg_namespace tn on tn.oid = t.typnamespace and tn.nspname = c.udt_schema
-    where c.table_schema = ${input.schema}
-      and c.table_name = ${input.table}
-      and c.column_name = ${input.column}`
-  const column = columnRows[0]
-  if (!column || !column.is_updatable) {
+  const columns = await tableColumnMetadata(sql, input.schema, input.table)
+  const column = columns.find((candidate) => candidate.name === input.column)
+  if (!column || !column.updatable) {
     throw editError('READ_ONLY_COLUMN', 'column is not available for inline editing')
   }
-  const native = String(column.native)
-  const type = column.type_kind === 'e' ? 'enum' : normalizePgType(native)
-  if (!INLINE_EDIT_TYPES.has(type)) {
-    throw editError('READ_ONLY_COLUMN', `inline editing is not supported for ${native}`)
+  if (!INLINE_EDIT_TYPES.has(column.type)) {
+    throw editError('READ_ONLY_COLUMN', `inline editing is not supported for ${column.native}`)
   }
 
-  const pkRows = await sql`
-    select kcu.column_name as col from information_schema.table_constraints tc
-    join information_schema.key_column_usage kcu
-      on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
-    where tc.table_schema = ${input.schema} and tc.table_name = ${input.table}
-      and tc.constraint_type = 'PRIMARY KEY'
-    order by kcu.ordinal_position`
-  const primaryKey = pkRows.map((row) => String(row.col))
+  const primaryKey = await primaryKeyColumns(sql, input.schema, input.table)
   if (!primaryKey.length) {
     throw editError('SAFE_EDIT_REQUIRED', 'table has no primary key and is read-only')
   }
   if (primaryKey.includes(input.column)) {
     throw editError('READ_ONLY_COLUMN', 'primary key columns are read-only')
   }
-  const identityKeys = Object.keys(input.identity)
-  if (
-    identityKeys.length !== primaryKey.length
-    || primaryKey.some((key) => !hasOwn(input.identity, key))
-    || identityKeys.some((key) => !primaryKey.includes(key))
-  ) {
-    throw editError('INVALID_IDENTITY', 'row identity must contain the complete primary key')
-  }
 
   const params: unknown[] = [input.value]
-  const identityConditions = primaryKey.map((key) => {
-    params.push(input.identity[key])
-    return `${quoteIdent(key)} is not distinct from $${params.length}`
-  })
+  const rowConditions = identityConditions(input.identity, primaryKey, params)
   params.push(input.originalValue)
   const originalCondition = `${quoteIdent(input.column)} is not distinct from $${params.length}`
   const text = `update ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
     + ` set ${quoteIdent(input.column)} = $1`
-    + ` where ${[...identityConditions, originalCondition].join(' and ')}`
+    + ` where ${[...rowConditions, originalCondition].join(' and ')}`
     + ' returning *'
   const rows = await sql.unsafe(text, params as never[])
   if (rows.length !== 1) {
     throw editError('ROW_CHANGED', 'row changed or disappeared; reload before editing again')
+  }
+  return { affectedRows: 1, row: { ...rows[0] } }
+}
+
+export async function insertTableRow(sql: Sql, input: RowInsertInput): Promise<RowMutationResult> {
+  const columns = await tableColumnMetadata(sql, input.schema, input.table)
+  if (!columns.length) throw editError('TABLE_NOT_FOUND', 'table was not found')
+  const valueColumns = Object.keys(input.values)
+  for (const name of valueColumns) {
+    const column = columns.find((candidate) => candidate.name === name)
+    if (!column || !column.insertable) {
+      throw editError('READ_ONLY_COLUMN', `column ${name} is not available for insert`)
+    }
+    if (!INLINE_EDIT_TYPES.has(column.type)) {
+      throw editError('READ_ONLY_COLUMN', `insert is not supported for ${column.native}`)
+    }
+  }
+  const params = valueColumns.map((name) => input.values[name])
+  const text = valueColumns.length
+    ? `insert into ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
+      + ` (${valueColumns.map(quoteIdent).join(', ')})`
+      + ` values (${params.map((_, index) => `$${index + 1}`).join(', ')}) returning *`
+    : `insert into ${quoteIdent(input.schema)}.${quoteIdent(input.table)} default values returning *`
+  const rows = await sql.unsafe(text, params as never[])
+  if (rows.length !== 1) throw editError('ROW_CHANGED', 'insert did not return exactly one row')
+  return { affectedRows: 1, row: { ...rows[0] } }
+}
+
+export async function deleteTableRow(sql: Sql, input: RowDeleteInput): Promise<RowMutationResult> {
+  if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
+  const primaryKey = await primaryKeyColumns(sql, input.schema, input.table)
+  if (!primaryKey.length) {
+    throw editError('SAFE_EDIT_REQUIRED', 'table has no primary key and rows cannot be deleted')
+  }
+  const params: unknown[] = []
+  const conditions = identityConditions(input.identity, primaryKey, params)
+  params.push(input.version)
+  conditions.push(`xmin::text = $${params.length}`)
+  const text = `delete from ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
+    + ` where ${conditions.join(' and ')} returning *`
+  const rows = await sql.unsafe(text, params as never[])
+  if (rows.length !== 1) {
+    throw editError('ROW_CHANGED', 'row changed or disappeared; reload before deleting it')
   }
   return { affectedRows: 1, row: { ...rows[0] } }
 }

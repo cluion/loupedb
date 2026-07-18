@@ -13,20 +13,25 @@ function result(rows: Array<Record<string, unknown>>): { ok: true; data: QueryRe
         { name: 'label', nativeType: 'text', type: 'string', nullable: true },
       ],
       rows,
+      rowVersions: rows.map((_, index) => String(index + 10)),
       executionMs: 1,
     },
   }
 }
 
-const { browseMock, describeMock, updateCellMock } = vi.hoisted(() => ({
+const { browseMock, deleteRowMock, describeMock, insertRowMock, updateCellMock } = vi.hoisted(() => ({
   browseMock: vi.fn(async (_s: string, _t: string, _o: BrowseOpts) =>
     ({ ok: true, data: { columns: [], rows: [], executionMs: 0 } })),
   describeMock: vi.fn(),
+  deleteRowMock: vi.fn(),
+  insertRowMock: vi.fn(),
   updateCellMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   browse: browseMock,
+  deleteRow: deleteRowMock,
+  insertRow: insertRowMock,
   updateCell: updateCellMock,
   execute: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
 }))
@@ -43,13 +48,24 @@ beforeEach(() => {
     ok: true,
     data: {
       schema: 'public', table: 'items',
-      columns: result([]).data.columns,
+      columns: [
+        { ...result([]).data.columns[0]!, editable: true, insertable: true, defaultValue: "nextval('items_id_seq')" },
+        { ...result([]).data.columns[1]!, nullable: false, editable: true, insertable: true },
+      ],
       primaryKey: ['id'], foreignKeys: [],
     },
   })
   updateCellMock.mockReset()
   updateCellMock.mockResolvedValue({
     ok: true, data: { affectedRows: 1, row: { id: 1, label: 'edited' } },
+  })
+  insertRowMock.mockReset()
+  insertRowMock.mockResolvedValue({
+    ok: true, data: { affectedRows: 1, row: { id: 2, label: 'new' } },
+  })
+  deleteRowMock.mockReset()
+  deleteRowMock.mockResolvedValue({
+    ok: true, data: { affectedRows: 1, row: { id: 1, label: 'a' } },
   })
 })
 
@@ -67,7 +83,7 @@ describe('DataGrid', () => {
   it('renders headers and rows from browse', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
-    expect(w.findAll('th').map(th => th.text())).toEqual(['id', 'label'])
+    expect(w.findAll('th').map(th => th.text())).toEqual(['id', 'label', '操作'])
     expect(w.text()).toContain('a')
     expect(browseMock).toHaveBeenCalledWith('public', 'items', expect.objectContaining({ limit: 50, offset: 0 }))
   })
@@ -123,7 +139,7 @@ describe('DataGrid', () => {
 
   it('previews and confirms one parameterized cell update by primary key', async () => {
     const w = await mountSuspended(DataGrid, { props })
-    await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(2))
+    await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))
 
     await w.findAll('td')[1]!.trigger('dblclick')
     await w.get('[aria-label="編輯 label 第 1 列"]').setValue('edited')
@@ -154,5 +170,43 @@ describe('DataGrid', () => {
     await w.findAll('td')[1]!.trigger('dblclick')
     expect(w.find('[aria-label="編輯 label 第 1 列"]').exists()).toBe(false)
     expect(updateCellMock).not.toHaveBeenCalled()
+    expect(w.get('[aria-label="刪除第 1 列"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('previews and inserts a row while omitting DEFAULT columns', async () => {
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+    await w.findAll('button').find(button => button.text() === '新增資料列')!.trigger('click')
+    expect((w.get('[aria-label="id 輸入方式"]').element as HTMLSelectElement).value).toBe('default')
+    await w.get('[aria-label="label 的值"]').setValue('new row')
+    await w.findAll('button').find(button => button.text() === '預覽新增')!.trigger('click')
+    expect(w.get('[aria-label="確認新增資料列"] pre').text()).toContain('INSERT INTO "public"."items" ("label")')
+
+    await w.findAll('button').find(button => button.text() === '確認新增 1 列')!.trigger('click')
+    await vi.waitFor(() => expect(insertRowMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', values: { label: 'new row' },
+    }))
+    await vi.waitFor(() => expect(w.text()).toContain('已新增 1 列'))
+  })
+
+  it('uses Clone to prefill non-PK values and keeps a serial PK on DEFAULT', async () => {
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.find('[aria-label="Clone 第 1 列"]').exists()).toBe(true))
+    await w.get('[aria-label="Clone 第 1 列"]').trigger('click')
+    expect((w.get('[aria-label="id 輸入方式"]').element as HTMLSelectElement).value).toBe('default')
+    expect((w.get('[aria-label="label 的值"]').element as HTMLInputElement).value).toBe('a')
+  })
+
+  it('previews and deletes one row by PK and row version', async () => {
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.find('[aria-label="刪除第 1 列"]').exists()).toBe(true))
+    await w.get('[aria-label="刪除第 1 列"]').trigger('click')
+    expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('"id" IS NOT DISTINCT FROM $1')
+    expect(w.get('[aria-label="確認刪除資料列"] pre').text()).toContain('xmin::text = $2')
+    await w.findAll('button').find(button => button.text() === '確認刪除 1 列')!.trigger('click')
+    await vi.waitFor(() => expect(deleteRowMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'items', identity: { id: 1 }, version: '10',
+    }))
+    await vi.waitFor(() => expect(w.text()).toContain('已刪除 1 列'))
   })
 })

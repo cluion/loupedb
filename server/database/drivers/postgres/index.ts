@@ -1,8 +1,8 @@
-import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, TransactionState } from '#shared/types'
+import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, RowDeleteInput, RowInsertInput, TransactionState } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle, type PostgresSession } from './connection'
 import { listDatabases, listSchemas, listTables, listColumns, listFunctions, describeTable } from './schema'
-import { executeUnsafe, browseTable, updateTableCell, type CancellableQuery } from './query'
+import { deleteTableRow, executeUnsafe, browseTable, insertTableRow, updateTableCell, type CancellableQuery } from './query'
 import { cancelQuery, streamTable } from './stream'
 
 function withoutLeadingComments(source: string): string {
@@ -259,6 +259,32 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
           throw transactionError('TX_ACTIVE', 'finish the manual transaction before editing table data')
         }
         return await handle.run((sql) => updateTableCell(sql, input))
+      } finally {
+        unlock()
+      }
+    },
+
+    async insertRow(input: RowInsertInput) {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!handle) throw new Error('not connected')
+        if (transaction) {
+          throw transactionError('TX_ACTIVE', 'finish the manual transaction before inserting table data')
+        }
+        return await handle.run((sql) => insertTableRow(sql, input))
+      } finally {
+        unlock()
+      }
+    },
+
+    async deleteRow(input: RowDeleteInput) {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!handle) throw new Error('not connected')
+        if (transaction) {
+          throw transactionError('TX_ACTIVE', 'finish the manual transaction before deleting table data')
+        }
+        return await handle.run((sql) => deleteTableRow(sql, input))
       } finally {
         unlock()
       }

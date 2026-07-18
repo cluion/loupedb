@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **資料列新增、Clone 與刪除**：DataGrid 依 schema metadata 產生新增表單，支援 DEFAULT、明確 NULL 與 Clone 預填；寫入前顯示 parameterized `INSERT`／`DELETE` 與 bind values，刪除必須匹配完整 primary key 與 PostgreSQL `xmin` row version，無主鍵資料表仍可新增但不可刪除
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

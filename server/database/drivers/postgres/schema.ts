@@ -71,6 +71,7 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
            c.udt_name as native,
            c.is_nullable = 'YES' as nullable,
            c.is_updatable = 'YES' as editable,
+           c.is_generated = 'NEVER' and c.is_identity = 'NO' as insertable,
            c.column_default as col_default,
            t.typtype as type_kind
     from information_schema.columns c
@@ -84,6 +85,7 @@ export async function describeTable(sql: Sql, schema: string, table: string): Pr
     return {
       name: String(r.name), nativeType: native, type,
       nullable: Boolean(r.nullable), editable: Boolean(r.editable),
+      insertable: Boolean(r.insertable),
       defaultValue: r.col_default ?? undefined,
     }
   })

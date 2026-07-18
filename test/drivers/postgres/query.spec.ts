@@ -59,6 +59,49 @@ describe('postgres driver execute/browse', () => {
     await driver.disconnect()
   })
 
+  it('inserts and deletes one row using PK plus the browsed row version', async () => {
+    const driver = await setup()
+    const inserted = await driver.insertRow({
+      schema: 'public', table: 'items', values: { label: 'inserted', qty: 4 },
+    })
+    expect(inserted).toMatchObject({ affectedRows: 1, row: { label: 'inserted', qty: 4 } })
+    const id = inserted.row.id
+    const browsed = await driver.browse('public', 'items', {
+      limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: id }],
+    })
+    expect(browsed.columns.map((column) => column.name)).toEqual(['id', 'label', 'qty'])
+    expect(browsed.rows).toEqual([{ id, label: 'inserted', qty: 4 }])
+    expect(browsed.rowVersions).toMatchObject([expect.stringMatching(/^\d+$/u)])
+
+    const deleted = await driver.deleteRow({
+      schema: 'public', table: 'items', identity: { id }, version: browsed.rowVersions![0]!,
+    })
+    expect(deleted).toMatchObject({ affectedRows: 1, row: { id, label: 'inserted' } })
+    const after = await driver.execute('select count(*)::int as count from items where id = $1', [id])
+    expect(after.rows).toEqual([{ count: 0 }])
+    await driver.disconnect()
+  })
+
+  it('inserts DEFAULT VALUES when every field is omitted', async () => {
+    const driver = await setup()
+    await driver.execute("create table defaults_only (id serial primary key, label text not null default 'ready')")
+    const inserted = await driver.insertRow({ schema: 'public', table: 'defaults_only', values: {} })
+    expect(inserted).toMatchObject({ affectedRows: 1, row: { id: 1, label: 'ready' } })
+    await driver.disconnect()
+  })
+
+  it('rejects delete when the row version changed after browsing', async () => {
+    const driver = await setup()
+    const browsed = await driver.browse('public', 'items', {
+      limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: 1 }],
+    })
+    await driver.execute("update items set label = 'newer' where id = 1")
+    await expect(driver.deleteRow({
+      schema: 'public', table: 'items', identity: { id: 1 }, version: browsed.rowVersions![0]!,
+    })).rejects.toMatchObject({ code: 'ROW_CHANGED' })
+    await driver.disconnect()
+  })
+
   it('keeps primary keys and tables without a primary key read-only', async () => {
     const driver = await setup()
     await expect(driver.updateCell({
@@ -68,9 +111,15 @@ describe('postgres driver execute/browse', () => {
 
     await driver.execute('create table notes (label text)')
     await driver.execute("insert into notes values ('a')")
+    await expect(driver.insertRow({
+      schema: 'public', table: 'notes', values: { label: 'b' },
+    })).resolves.toMatchObject({ affectedRows: 1, row: { label: 'b' } })
     await expect(driver.updateCell({
       schema: 'public', table: 'notes', column: 'label', value: 'edited',
       originalValue: 'a', identity: { label: 'a' },
+    })).rejects.toMatchObject({ code: 'SAFE_EDIT_REQUIRED' })
+    await expect(driver.deleteRow({
+      schema: 'public', table: 'notes', identity: { label: 'a' }, version: '1',
     })).rejects.toMatchObject({ code: 'SAFE_EDIT_REQUIRED' })
     await driver.disconnect()
   })
@@ -81,6 +130,12 @@ describe('postgres driver execute/browse', () => {
     await expect(driver.updateCell({
       schema: 'public', table: 'items', column: 'label', value: 'edited',
       originalValue: 'a', identity: { id: 1 },
+    })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
+    await expect(driver.insertRow({
+      schema: 'public', table: 'items', values: { label: 'blocked' },
+    })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
+    await expect(driver.deleteRow({
+      schema: 'public', table: 'items', identity: { id: 1 }, version: '1',
     })).rejects.toMatchObject({ code: 'TX_ACTIVE' })
     await driver.rollbackTransaction()
     await driver.disconnect()
