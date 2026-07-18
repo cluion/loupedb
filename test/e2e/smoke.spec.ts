@@ -85,6 +85,43 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await expect(page.locator('th[data-column="id"]')).toHaveCount(0)
   await expect(labelHeader).toHaveClass(/frozen-column/u)
 
+  // a dragged rectangle copies as TSV and spreadsheet paste becomes staged edits
+  const visibleLabelCells = page.locator('tbody td[data-column="label"]')
+  const firstLabelCell = visibleLabelCells.filter({ hasText: /^x$/u })
+  const secondLabelCell = visibleLabelCells.filter({ hasText: /^y$/u })
+  await secondLabelCell.scrollIntoViewIfNeeded()
+  const firstLabelBox = await firstLabelCell.boundingBox()
+  const secondLabelBox = await secondLabelCell.boundingBox()
+  if (!firstLabelBox || !secondLabelBox) throw new Error('label cells are not visible')
+  expect(await page.evaluate(({ x, y }) => {
+    const cell = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-selection-row]')
+    return cell ? { row: cell.dataset.selectionRow, column: cell.dataset.selectionColumn } : null
+  }, { x: secondLabelBox.x + 20, y: secondLabelBox.y + secondLabelBox.height / 2 })).toEqual({
+    row: '1', column: '0',
+  })
+  await page.mouse.move(firstLabelBox.x + 20, firstLabelBox.y + firstLabelBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(secondLabelBox.x + 20, secondLabelBox.y + secondLabelBox.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect(page.getByTestId('cell-selection-toolbar')).toContainText('2 × 1・2 格')
+  const copiedTsv = await firstLabelCell.evaluate((cell) => {
+    const data = new DataTransfer()
+    cell.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+    return data.getData('text/plain')
+  })
+  expect(copiedTsv).toBe('x\ny')
+  await firstLabelCell.evaluate((cell) => {
+    const data = new DataTransfer()
+    data.setData('text/plain', 'sheet one\nsheet two')
+    cell.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+  })
+  await expect(page.getByTestId('staged-changes')).toContainText('待套用變更・2')
+  await expect(page.getByRole('cell', { name: 'sheet one', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'sheet two', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '全部回復' }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'y', exact: true })).toBeVisible()
+
   // edits stay local with a dirty marker until the atomic batch is applied
   await expect(page.getByTestId('editability-status')).toContainText('可編輯')
   await page.getByRole('cell', { name: 'x', exact: true }).dblclick()

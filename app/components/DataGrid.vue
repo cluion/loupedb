@@ -25,6 +25,12 @@ import {
   useTableColumnDisplay,
 } from '../stores/tableColumnDisplay'
 import { useTableFilterHistory, type TableFilterHistoryEntry } from '../stores/tableFilterHistory'
+import {
+  normalizeGridRange,
+  parseSpreadsheetTsv,
+  selectionToTsv,
+  type GridCoordinate,
+} from '../utils/tableSelection'
 
 const props = withDefaults(defineProps<{
   connectionId: string
@@ -92,6 +98,11 @@ const tableScope = [
 ].join('\u001f')
 const filterHistory = useTableFilterHistory(tableScope)
 const columnDisplay = useTableColumnDisplay(tableScope)
+const selectionAnchor = ref<GridCoordinate | null>(null)
+const selectionExtent = ref<GridCoordinate | null>(null)
+const selectionMessage = ref<string | null>(null)
+const selectionError = ref<string | null>(null)
+let selectingCells = false
 
 interface CellEditorState {
   readonly rowIndex: number
@@ -186,6 +197,20 @@ const orderedColumns = computed<ReadonlyArray<ColumnInfo>>(() => {
 const hiddenColumns = computed(() => new Set(columnDisplay.settings.value.hidden))
 const visibleColumns = computed(() => orderedColumns.value.filter((column) => !hiddenColumns.value.has(column.name)))
 const frozenColumns = computed(() => visibleColumns.value.slice(0, columnDisplay.settings.value.frozenCount))
+const cellSelection = computed(() => {
+  if (!selectionAnchor.value || !selectionExtent.value || !result.value) return null
+  const range = normalizeGridRange(selectionAnchor.value, selectionExtent.value)
+  if (range.rowStart < 0 || range.rowEnd >= result.value.rows.length) return null
+  if (range.columnStart < 0 || range.columnEnd >= visibleColumns.value.length) return null
+  return range
+})
+const selectedRowCount = computed(() => cellSelection.value
+  ? cellSelection.value.rowEnd - cellSelection.value.rowStart + 1
+  : 0)
+const selectedColumnCount = computed(() => cellSelection.value
+  ? cellSelection.value.columnEnd - cellSelection.value.columnStart + 1
+  : 0)
+const selectedCellCount = computed(() => selectedRowCount.value * selectedColumnCount.value)
 const frozenOffsets = computed(() => {
   const offsets = new Map<string, number>()
   let left = 0
@@ -199,9 +224,11 @@ watch(stagedCount, (count) => emit('dirty-state', count > 0), { immediate: true 
 onUnmounted(() => {
   emit('dirty-state', false)
   stopColumnResize()
+  stopCellSelection()
 })
 
 async function load() {
+  clearCellSelection()
   error.value = null
   loading.value = true
   const filter: BrowseOpts['filter'] = appliedFilters.value.length ? appliedFilters.value : undefined
@@ -276,6 +303,7 @@ function updateColumnWidthFromInput(column: string, event: Event) {
 
 function toggleColumn(column: string) {
   if (stagedCount.value) return
+  clearCellSelection()
   const hidden = new Set(columnDisplay.settings.value.hidden)
   if (hidden.has(column)) hidden.delete(column)
   else {
@@ -296,6 +324,7 @@ function moveColumn(column: string, delta: -1 | 1) {
   const from = order.indexOf(column)
   const to = from + delta
   if (from < 0 || to < 0 || to >= order.length) return
+  clearCellSelection()
   ;[order[from], order[to]] = [order[to]!, order[from]!]
   columnDisplay.update({ ...columnDisplay.settings.value, order })
 }
@@ -314,6 +343,7 @@ function clearFrozenColumns() {
 
 function resetColumnDisplay() {
   if (stagedCount.value) return
+  clearCellSelection()
   columnDisplay.reset(result.value?.columns.map((column) => column.name) ?? [])
 }
 
@@ -367,6 +397,241 @@ function stopColumnResize() {
   window.removeEventListener('pointermove', resizeColumn)
   window.removeEventListener('pointerup', stopColumnResize)
   window.removeEventListener('pointercancel', stopColumnResize)
+}
+
+function clearCellSelection() {
+  selectionAnchor.value = null
+  selectionExtent.value = null
+  selectionMessage.value = null
+  selectionError.value = null
+  stopCellSelection()
+}
+
+function startCellSelection(event: PointerEvent, row: number, column: number) {
+  if (event.button !== 0 || (event.target as HTMLElement).closest('.cell-editor')) return
+  if (!event.shiftKey || !selectionAnchor.value) selectionAnchor.value = { row, column }
+  selectionExtent.value = { row, column }
+  selectionMessage.value = null
+  selectionError.value = null
+  selectingCells = true
+  ;(event.currentTarget as HTMLElement).focus()
+  event.preventDefault()
+  window.addEventListener('pointermove', moveCellSelection)
+  window.addEventListener('pointerup', stopCellSelection)
+  window.addEventListener('pointercancel', stopCellSelection)
+}
+
+function moveCellSelection(event: PointerEvent) {
+  if (!selectingCells || !selectionAnchor.value) return
+  const cell = document.elementFromPoint(event.clientX, event.clientY)
+    ?.closest<HTMLElement>('[data-selection-row][data-selection-column]')
+  if (!cell) return
+  const row = Number(cell.dataset.selectionRow)
+  const column = Number(cell.dataset.selectionColumn)
+  if (Number.isInteger(row) && Number.isInteger(column)) extendCellSelection(row, column)
+}
+
+function extendCellSelection(row: number, column: number) {
+  if (!selectingCells || !selectionAnchor.value) return
+  selectionExtent.value = { row, column }
+}
+
+function stopCellSelection() {
+  selectingCells = false
+  if (typeof window === 'undefined') return
+  window.removeEventListener('pointermove', moveCellSelection)
+  window.removeEventListener('pointerup', stopCellSelection)
+  window.removeEventListener('pointercancel', stopCellSelection)
+}
+
+function isSelectedCell(row: number, column: number): boolean {
+  const range = cellSelection.value
+  return Boolean(range
+    && row >= range.rowStart && row <= range.rowEnd
+    && column >= range.columnStart && column <= range.columnEnd)
+}
+
+function isSelectionAnchor(row: number, column: number): boolean {
+  return selectionAnchor.value?.row === row && selectionAnchor.value.column === column
+}
+
+function focusSelectedCell(row: number, column: number) {
+  nextTick(() => {
+    document.querySelector<HTMLElement>(
+      `[data-selection-row="${row}"][data-selection-column="${column}"]`,
+    )?.focus()
+  })
+}
+
+function handleCellKeydown(event: KeyboardEvent, row: number, column: number) {
+  if ((event.target as HTMLElement).closest('.cell-editor')) return
+  if (event.key === 'Escape') {
+    clearCellSelection()
+    return
+  }
+  const movements: Readonly<Record<string, readonly [number, number]>> = {
+    ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1],
+  }
+  const movement = movements[event.key]
+  if (!movement || !result.value) return
+  const next = {
+    row: Math.max(0, Math.min(result.value.rows.length - 1, row + movement[0])),
+    column: Math.max(0, Math.min(visibleColumns.value.length - 1, column + movement[1])),
+  }
+  if (!event.shiftKey) selectionAnchor.value = next
+  else if (!selectionAnchor.value) selectionAnchor.value = { row, column }
+  selectionExtent.value = next
+  selectionMessage.value = null
+  selectionError.value = null
+  event.preventDefault()
+  focusSelectedCell(next.row, next.column)
+}
+
+function selectedRangeTsv(): string | null {
+  const range = cellSelection.value
+  if (!range || !result.value) return null
+  const values = []
+  for (let row = range.rowStart; row <= range.rowEnd; row++) {
+    const record = result.value.rows[row]!
+    values.push(visibleColumns.value
+      .slice(range.columnStart, range.columnEnd + 1)
+      .map((column) => cellValue(record, column.name)))
+  }
+  return selectionToTsv(values)
+}
+
+function isClipboardInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
+}
+
+function copySelectionEvent(event: ClipboardEvent) {
+  if (isClipboardInput(event.target)) return
+  const text = selectedRangeTsv()
+  if (text === null || !event.clipboardData) return
+  event.clipboardData.setData('text/plain', text)
+  event.preventDefault()
+  selectionMessage.value = `已複製 ${selectedCellCount.value} 格 TSV`
+  selectionError.value = null
+}
+
+async function copyCellSelection() {
+  const text = selectedRangeTsv()
+  if (text === null) return
+  try {
+    await navigator.clipboard.writeText(text)
+    selectionMessage.value = `已複製 ${selectedCellCount.value} 格 TSV`
+    selectionError.value = null
+  } catch {
+    selectionError.value = '無法寫入剪貼簿，請使用 ⌘/Ctrl+C'
+  }
+}
+
+function pastedUpdate(
+  row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo, value: string,
+): PendingCellUpdate {
+  const identity = identityFor(row)!.values
+  const version = rowVersion(rowIndex)!
+  const staged = stagedUpdateFor(row, column.name)
+  const originalValue = staged ? staged.originalValue : row[column.name]
+  const identityEntries = Object.entries(identity)
+  const params = [value, ...identityEntries.map(([, identityValue]) => identityValue), originalValue]
+  const conditions = identityEntries.map(([identityColumn], index) =>
+    `${quotePreviewIdentifier(identityColumn)} IS NOT DISTINCT FROM $${index + 2}`)
+  conditions.push(`${quotePreviewIdentifier(column.name)} IS NOT DISTINCT FROM $${params.length}`)
+  params.push(version)
+  conditions.push(`xmin::text = $${params.length}`)
+  return {
+    schema: props.schema,
+    table: props.table,
+    column: column.name,
+    value,
+    originalValue,
+    identity,
+    version,
+    rowIndex,
+    sql: `UPDATE ${quotePreviewIdentifier(props.schema)}.${quotePreviewIdentifier(props.table)}\n`
+      + `SET ${quotePreviewIdentifier(column.name)} = $1\n`
+      + `WHERE ${conditions.join('\n  AND ')};`,
+    params,
+  }
+}
+
+function stagePastedUpdates(updates: ReadonlyArray<PendingCellUpdate>): number {
+  let next = [...stagedUpdates.value]
+  for (const input of updates) {
+    const signature = identitySignature(input.identity)
+    const previous = next.find((change) => (
+      identitySignature(change.identity) === signature && change.column === input.column
+    ))
+    next = next.filter((change) => !(
+      identitySignature(change.identity) === signature && change.column === input.column
+    ))
+    if (!Object.is(input.value, input.originalValue)) {
+      next.push({ ...input, order: previous?.order ?? nextStagedChangeOrder++ })
+    }
+  }
+  stagedUpdates.value = next
+  return updates.filter((update) => !Object.is(update.value, update.originalValue)).length
+}
+
+function pasteSpreadsheetText(text: string) {
+  const range = cellSelection.value
+  if (!range || !result.value) return
+  selectionMessage.value = null
+  selectionError.value = null
+  if (saving.value) {
+    selectionError.value = '資料仍在套用中，請稍後再貼上'
+    return
+  }
+  let matrix: ReadonlyArray<ReadonlyArray<string>>
+  try {
+    matrix = parseSpreadsheetTsv(text)
+  } catch (cause) {
+    selectionError.value = cause instanceof Error ? cause.message : String(cause)
+    return
+  }
+  const rowEnd = range.rowStart + matrix.length - 1
+  const columnEnd = range.columnStart + matrix[0]!.length - 1
+  if (rowEnd >= result.value.rows.length || columnEnd >= visibleColumns.value.length) {
+    selectionError.value = '貼上範圍超出目前已載入的資料列或可見欄位'
+    return
+  }
+
+  const updates: PendingCellUpdate[] = []
+  for (let rowOffset = 0; rowOffset < matrix.length; rowOffset++) {
+    const rowIndex = range.rowStart + rowOffset
+    const row = result.value.rows[rowIndex]!
+    for (let columnOffset = 0; columnOffset < matrix[rowOffset]!.length; columnOffset++) {
+      const column = visibleColumns.value[range.columnStart + columnOffset]!
+      if (!canEditCell(column, row, rowIndex)) {
+        selectionError.value = `第 ${offset.value + rowIndex + 1} 列的 ${column.name} 不可安全貼上`
+        return
+      }
+      updates.push(pastedUpdate(row, rowIndex, column, matrix[rowOffset]![columnOffset]!))
+    }
+  }
+
+  closeWritePanels()
+  const staged = stagePastedUpdates(updates)
+  selectionAnchor.value = { row: range.rowStart, column: range.columnStart }
+  selectionExtent.value = { row: rowEnd, column: columnEnd }
+  selectionMessage.value = staged
+    ? `已從剪貼簿暫存 ${staged} 個欄位變更`
+    : '貼上內容與原始資料相同，沒有新增變更'
+}
+
+function pasteSelectionEvent(event: ClipboardEvent) {
+  if (isClipboardInput(event.target) || !cellSelection.value || !event.clipboardData) return
+  event.preventDefault()
+  pasteSpreadsheetText(event.clipboardData.getData('text/plain'))
+}
+
+async function pasteCellSelection() {
+  try {
+    pasteSpreadsheetText(await navigator.clipboard.readText())
+  } catch {
+    selectionError.value = '無法讀取剪貼簿，請使用 ⌘/Ctrl+V'
+  }
 }
 
 function filterNeedsValue(op: BrowseFilterOperator): boolean {
@@ -963,7 +1228,7 @@ async function applyAll() {
       </div>
     </details>
     <div v-if="loading && !result" class="loading">載入中…</div>
-    <div class="scroll">
+    <div class="scroll" @copy="copySelectionEvent" @paste="pasteSelectionEvent">
       <table v-if="result">
         <thead>
           <tr>
@@ -995,21 +1260,29 @@ async function applyAll() {
         <tbody>
           <tr v-for="(row, i) in result.rows" :key="i" :class="{ 'pending-delete': isStagedDelete(row) }">
             <td
-              v-for="c in visibleColumns"
+              v-for="(c, columnIndex) in visibleColumns"
               :key="c.name"
               :style="columnStyle(c.name)"
               :data-column="c.name"
+              :data-selection-row="i"
+              :data-selection-column="columnIndex"
               :class="{
                 isnull: cellValue(row, c.name) === null,
                 editable: canEditCell(c, row, i),
                 editing: editor?.rowIndex === i && editor.column === c.name,
                 dirty: Boolean(stagedUpdateFor(row, c.name)),
+                'selected-cell': isSelectedCell(i, columnIndex),
+                'selection-anchor': isSelectionAnchor(i, columnIndex),
                 'frozen-column': isFrozenColumn(c.name),
                 'last-frozen-column': isLastFrozenColumn(c.name),
               }"
-              :tabindex="canEditCell(c, row, i) ? 0 : undefined"
-              :title="canEditCell(c, row, i) ? '雙擊或按 Enter 編輯' : undefined"
+              tabindex="0"
+              :aria-selected="isSelectedCell(i, columnIndex) ? 'true' : undefined"
+              :title="canEditCell(c, row, i) ? '拖曳選取；雙擊或按 Enter 編輯' : '拖曳選取'"
+              @pointerdown="startCellSelection($event, i, columnIndex)"
+              @pointerenter="extendCellSelection(i, columnIndex)"
               @dblclick="beginEdit(row, i, c)"
+              @keydown="handleCellKeydown($event, i, columnIndex)"
               @keydown.enter.prevent="beginEdit(row, i, c)"
             >
               <div
@@ -1053,6 +1326,26 @@ async function applyAll() {
         </tbody>
       </table>
     </div>
+    <div
+      v-if="cellSelection"
+      class="cell-selection-toolbar"
+      data-testid="cell-selection-toolbar"
+      role="group"
+      aria-label="儲存格選取工具"
+    >
+      <strong>已選取 {{ selectedRowCount }} × {{ selectedColumnCount }}・{{ selectedCellCount }} 格</strong>
+      <small>拖曳或 Shift＋方向鍵延伸；⌘/Ctrl+C 複製、⌘/Ctrl+V 貼上</small>
+      <button type="button" class="ghost" @click="copyCellSelection">複製選取</button>
+      <button
+        type="button"
+        class="ghost"
+        :disabled="saving || isConnectionReadOnly"
+        @click="pasteCellSelection"
+      >貼上</button>
+      <button type="button" class="ghost" @click="clearCellSelection">清除選取</button>
+    </div>
+    <p v-if="selectionMessage" class="selection-message" role="status">{{ selectionMessage }}</p>
+    <p v-if="selectionError" class="selection-error" role="alert">{{ selectionError }}</p>
     <section
       v-if="insertDraft && !pendingInsert"
       class="row-insert"
@@ -1227,6 +1520,14 @@ async function applyAll() {
 .freeze-through { min-width: 76px; }
 .column-display-actions { justify-content: flex-end; margin-top: 8px; }
 
+.cell-selection-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--brass); border-radius: var(--radius); background: var(--panel-2); }
+.cell-selection-toolbar strong { color: var(--brass); font: 12px var(--font-data); }
+.cell-selection-toolbar small { flex: 1; color: var(--muted); font-size: 11px; }
+.cell-selection-toolbar button { white-space: nowrap; }
+.selection-message, .selection-error { margin: 0; font-size: 12px; }
+.selection-message { color: #86b98d; }
+.selection-error { color: var(--danger); }
+
 .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table {
   border-collapse: collapse;
@@ -1270,8 +1571,12 @@ th.locked { cursor: not-allowed; }
 tbody tr:hover { background: var(--brass-soft); }
 tbody tr:hover td.frozen-column { background: var(--panel-2); }
 tbody tr:last-child td { border-bottom: none; }
+tbody td:not(.row-actions) { user-select: none; }
 .isnull { color: var(--muted); font-style: italic; }
 .dirty { background: var(--brass-soft); box-shadow: inset 3px 0 var(--brass); }
+.selected-cell, tbody tr:hover .selected-cell { background: color-mix(in srgb, var(--brass) 18%, var(--panel)); box-shadow: inset 0 0 0 1px var(--brass); }
+.selected-cell.frozen-column, tbody tr:hover .selected-cell.frozen-column { background: color-mix(in srgb, var(--brass) 18%, var(--panel)); }
+.selection-anchor { box-shadow: inset 0 0 0 2px var(--brass); }
 .pending-delete td:not(.row-actions) { opacity: 0.55; text-decoration: line-through; }
 .editable { cursor: text; }
 .editable:focus { outline: 1px solid var(--brass); outline-offset: -2px; }
@@ -1320,6 +1625,8 @@ tbody tr:last-child td { border-bottom: none; }
   .filter-history time { display: none; }
   .column-display li { grid-template-columns: minmax(0, 1fr) 112px; }
   .column-order-actions { grid-column: 1 / 3; justify-content: flex-start; padding-left: 24px; }
+  .cell-selection-toolbar { flex-wrap: wrap; }
+  .cell-selection-toolbar small { flex-basis: 100%; order: 2; }
   .insert-field { grid-template-columns: 1fr; }
 }
 </style>

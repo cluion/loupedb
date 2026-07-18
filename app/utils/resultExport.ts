@@ -30,6 +30,10 @@ function formulaSafe(value: unknown, text: string): string {
   return typeof value === 'string' && /^[=+\-@]/.test(text) ? `'${text}` : text
 }
 
+export function toSpreadsheetCell(value: unknown): string {
+  return formulaSafe(value, cellText(value).replaceAll(/[\t\r\n]+/g, ' '))
+}
+
 function csvField(value: unknown): string {
   const text = formulaSafe(value, cellText(value))
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
@@ -47,10 +51,9 @@ export function toCsv(result: QueryResult): string {
 export function toTsv(result: QueryResult): string {
   const names = result.columns.map((c) => c.name)
   // tabs/newlines inside a value would break the grid when pasted into a spreadsheet
-  const field = (value: unknown) => formulaSafe(value, cellText(value).replaceAll(/[\t\r\n]+/g, ' '))
   const lines = [
-    names.map(field).join('\t'),
-    ...result.rows.map((row) => names.map((n) => field(row[n])).join('\t')),
+    names.map(toSpreadsheetCell).join('\t'),
+    ...result.rows.map((row) => names.map((n) => toSpreadsheetCell(row[n])).join('\t')),
   ]
   return lines.join('\n')
 }

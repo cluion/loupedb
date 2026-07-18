@@ -207,6 +207,83 @@ describe('DataGrid', () => {
     }))
   })
 
+  it('selects a cell rectangle and copies spreadsheet-safe TSV', async () => {
+    browseMock.mockResolvedValue(result([
+      { id: 1, label: '=first' },
+      { id: 2, label: 'second' },
+    ]) as never)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.findAll('tbody td[data-selection-row]')).toHaveLength(4))
+
+    await w.get('[data-selection-row="0"][data-selection-column="0"]').trigger('pointerdown', { button: 0 })
+    await w.get('[data-selection-row="1"][data-selection-column="1"]').trigger('pointerenter')
+    window.dispatchEvent(new Event('pointerup'))
+    expect(w.get('[data-testid="cell-selection-toolbar"]').text()).toContain('2 × 2・4 格')
+    expect(w.findAll('td.selected-cell')).toHaveLength(4)
+
+    await w.findAll('button').find(button => button.text() === '複製選取')!.trigger('click')
+    expect(writeText).toHaveBeenCalledWith("1\t'=first\n2\tsecond")
+    vi.unstubAllGlobals()
+  })
+
+  it('pastes a TSV rectangle into editable cells as staged changes', async () => {
+    browseMock.mockResolvedValue(result([
+      { id: 1, label: 'first' },
+      { id: 2, label: 'second' },
+    ]) as never)
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.findAll('tbody td[data-selection-row]')).toHaveLength(4))
+    const firstLabel = w.get('[data-selection-row="0"][data-selection-column="1"]')
+    await firstLabel.trigger('pointerdown', { button: 0 })
+    window.dispatchEvent(new Event('pointerup'))
+
+    const paste = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { getData: (type: string) => type === 'text/plain' ? 'sheet one\nsheet two' : '' },
+    })
+    firstLabel.element.dispatchEvent(paste)
+    await vi.waitFor(() => expect(w.get('[data-testid="staged-changes"]').text()).toContain('待套用變更・2'))
+    expect(w.findAll('td.dirty').map(cell => cell.text())).toEqual(['sheet one', 'sheet two'])
+    expect(w.get('[data-testid="cell-selection-toolbar"]').text()).toContain('2 × 1・2 格')
+
+    await w.findAll('button').find(button => button.text() === '全部套用 2 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public',
+      table: 'items',
+      changes: [
+        {
+          kind: 'update', column: 'label', value: 'sheet one', originalValue: 'first',
+          identity: { id: 1 }, version: '10',
+        },
+        {
+          kind: 'update', column: 'label', value: 'sheet two', originalValue: 'second',
+          identity: { id: 2 }, version: '11',
+        },
+      ],
+    }))
+  })
+
+  it('rejects an unsafe pasted rectangle without staging a partial update', async () => {
+    browseMock.mockResolvedValue(result([
+      { id: 1, label: 'first' },
+      { id: 2, label: 'second' },
+    ]) as never)
+    const w = await mountSuspended(DataGrid, { props })
+    await vi.waitFor(() => expect(w.findAll('tbody td[data-selection-row]')).toHaveLength(4))
+    const firstId = w.get('[data-selection-row="0"][data-selection-column="0"]')
+    await firstId.trigger('pointerdown', { button: 0 })
+    window.dispatchEvent(new Event('pointerup'))
+
+    const paste = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(paste, 'clipboardData', { value: { getData: () => '3\n4' } })
+    firstId.element.dispatchEvent(paste)
+    await vi.waitFor(() => expect(w.get('.selection-error').text()).toContain('id 不可安全貼上'))
+    expect(w.find('[data-testid="staged-changes"]').exists()).toBe(false)
+    expect(w.find('td.dirty').exists()).toBe(false)
+  })
+
   it('stages and atomically applies one parameterized cell update by primary key', async () => {
     const w = await mountSuspended(DataGrid, { props })
     await vi.waitFor(() => expect(w.findAll('td')).toHaveLength(3))
