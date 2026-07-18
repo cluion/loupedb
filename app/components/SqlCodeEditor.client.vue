@@ -182,7 +182,10 @@ const loupeTheme = EditorView.theme({
     borderRight: '1px solid var(--line)',
   },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--brass)' },
-  '.cm-current-statement': { backgroundColor: 'rgba(127, 180, 201, 0.09)' }, // glass tint
+  '.cm-current-statement': {
+    backgroundColor: 'rgba(127, 180, 201, 0.14)',
+    boxShadow: 'inset 2px 0 var(--glass)',
+  },
 }, { dark: true })
 
 onMounted(() => {

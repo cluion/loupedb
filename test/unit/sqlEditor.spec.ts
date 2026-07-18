@@ -214,7 +214,9 @@ describe('SqlEditor', () => {
       sql: 'select 2 as second;', from: 19, to: 38, source: 'statement',
     })
     await nextTick()
-    expect(w.find('button.primary').text()).toBe('執行')
+    expect(w.find('button.primary').text()).toBe('執行目前語句')
+    expect(w.get('[data-testid="execution-scope"]').text()).toContain('目前只會執行編輯器中標示的語句')
+    expect(w.get('[data-testid="execution-scope"]').text()).toContain('由上到下執行 2 個 statement')
     await w.find('button.primary').trigger('click')
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 2 as second;')
@@ -228,9 +230,17 @@ describe('SqlEditor', () => {
     })
     await nextTick()
     expect(w.find('button.primary').text()).toBe('執行選取')
+    expect(w.get('[data-testid="execution-scope"]').text()).toContain('目前只會執行選取範圍')
     await w.find('button.primary').trigger('click')
     await vi.waitFor(() => expect(executeMock).toHaveBeenCalled())
     expect(executeMock.mock.calls[0]![0]).toBe('select 1 as first;')
+  })
+
+  it('keeps the short run label for a single statement', async () => {
+    const w = await mountSuspended(SqlEditor, mountOpts)
+    await w.find('textarea').setValue('select 1;')
+    expect(w.find('button.primary').text()).toBe('執行')
+    expect(w.find('[data-testid="execution-scope"]').exists()).toBe(false)
   })
 
   it('executes the payload carried by the editor run event (Mod-Enter path)', async () => {

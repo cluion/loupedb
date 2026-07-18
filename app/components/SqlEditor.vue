@@ -99,6 +99,15 @@ let lastParameterizedRun: {
 // the selection when one exists, otherwise the statement under the cursor
 const runnable = ref<RunnableSql | null>(null)
 const statementCount = computed(() => listSqlStatements(sql.value).length)
+const runLabel = computed(() => {
+  if (runnable.value?.source === 'selection') return '執行選取'
+  return statementCount.value > 1 ? '執行目前語句' : '執行'
+})
+const executionScopeHint = computed(() => {
+  if (statementCount.value <= 1) return null
+  const scope = runnable.value?.source === 'selection' ? '選取範圍' : '編輯器中標示的語句'
+  return `目前只會執行${scope}；「執行全部」會由上到下執行 ${statementCount.value} 個 statement`
+})
 const visibleOutput = computed<SqlExecutionResult | null>(() => (
   resultVersion.value === 'previous' ? previousQueryOutput.value : queryOutput.value
 ))
@@ -511,7 +520,7 @@ function showResultVersion(version: 'current' | 'previous') {
     </div>
     <div class="actions">
       <button v-if="!running" class="primary" title="⌘⏎ / Ctrl+Enter" @click="run()">
-        {{ runnable?.source === 'selection' ? '執行選取' : '執行' }}
+        {{ runLabel }}
       </button>
       <button v-else class="stop" :disabled="cancelling" aria-label="停止查詢" @click="stop">
         {{ cancelling ? '取消中…' : '停止' }}
@@ -523,6 +532,9 @@ function showResultVersion(version: 'current' | 'previous') {
         title="依序執行全部 statement"
         @click="runScript"
       >執行全部</button>
+      <span v-if="executionScopeHint" class="execution-scope" data-testid="execution-scope">
+        {{ executionScopeHint }}
+      </span>
       <button type="button" aria-label="格式化 SQL" title="⇧⌥F / Shift+Alt+F" @click="formatSql">
         格式化
       </button>
@@ -694,6 +706,7 @@ function showResultVersion(version: 'current' | 'previous') {
 .null-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .parameter-actions { justify-content: flex-end; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.execution-scope { flex-basis: 100%; color: var(--muted); font-size: 11px; }
 .meta { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
 .transaction-status { font: 11px var(--font-data); color: var(--muted); white-space: nowrap; }
 .transaction-status.active { color: var(--brass); }

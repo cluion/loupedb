@@ -7,6 +7,7 @@
 ### Added
 
 - **Unique Key 安全資料列定位**：沒有 primary key 的資料表可改用完整、非 NULL 的 PostgreSQL unique index 定位資料列，支援 inline editing 與搭配 `xmin` 的安全刪除；partial、expression、無效 index 與含 NULL 的唯一鍵值維持唯讀，Clone 會清空 unique key 欄位以避免衝突
+- **多 Statement 執行範圍提示**：SQL 草稿含多個 statement 時，主要按鈕明確顯示「執行目前語句」，編輯器加強標示即將執行的範圍，並提示「執行全部」才會由上到下執行完整 Script
 
 ## [0.12.0] - 2026-07-18
 
