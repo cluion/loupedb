@@ -1,5 +1,6 @@
 import { readBody } from 'h3'
 import type { CellUpdateInput } from '#shared/types'
+import { isCellMutationValue } from '#shared/cellValue'
 import { fail, withConnection } from '../../../../../../utils/api'
 import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
@@ -17,9 +18,11 @@ export default defineEventHandler(async (event) => {
   const table = getRouterParam(event, 'table') as string
   const body = await readBody<Record<string, unknown>>(event)
   if (typeof body.column !== 'string' || !body.column) return invalid('column is required')
-  if (!('value' in body) || !isScalar(body.value)) return invalid('value must be a scalar or null')
-  if (!('originalValue' in body) || !isScalar(body.originalValue)) {
-    return invalid('originalValue must be a scalar or null')
+  if (!('value' in body) || !isCellMutationValue(body.value)) {
+    return invalid('value must be a JSON-compatible cell value')
+  }
+  if (!('originalValue' in body) || !isCellMutationValue(body.originalValue)) {
+    return invalid('originalValue must be a JSON-compatible cell value')
   }
   if (!body.identity || typeof body.identity !== 'object' || Array.isArray(body.identity)) {
     return invalid('identity is required')

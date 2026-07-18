@@ -29,6 +29,11 @@ describe('browse API', async () => {
     await seedSql.unsafe(`insert into contacts values ('a@example.com', 'A')`).simple()
     await seedSql.unsafe(`create table batch_items (id serial primary key, label text not null)`).simple()
     await seedSql.unsafe(`insert into batch_items (label) values ('one'), ('two')`).simple()
+    await seedSql.unsafe(`create table content_items (
+      id serial primary key, document jsonb not null, tags text[] not null
+    )`).simple()
+    await seedSql.unsafe(`insert into content_items (document, tags)
+      values ('{"status":"draft"}', array['alpha','beta'])`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -103,6 +108,41 @@ describe('browse API', async () => {
     })
     expect(stale.ok).toBe(false)
     if (!stale.ok) expect(stale.error.code).toBe('ROW_CHANGED')
+  })
+
+  it('PATCH /cell and POST /changes accept JSON and array cell values', async () => {
+    const updatedJson = await $fetch<Envelope<{ affectedRows: 1; row: Record<string, unknown> }>>(
+      `/api/connections/${connId}/tables/public/content_items/cell`,
+      {
+        method: 'PATCH',
+        body: {
+          column: 'document', value: { status: 'published' },
+          originalValue: { status: 'draft' }, identity: { id: 1 },
+        },
+      },
+    )
+    expect(updatedJson).toMatchObject({
+      ok: true, data: { affectedRows: 1, row: { document: { status: 'published' } } },
+    })
+
+    const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: { schema: 'public', table: 'content_items', opts: { limit: 1, offset: 0 } },
+    })
+    if (!browsed.ok) throw new Error('structured cell browse failed')
+    const updatedArray = await $fetch<Envelope<{ affectedRows: number }>>(
+      `/api/connections/${connId}/tables/public/content_items/changes`,
+      {
+        method: 'POST',
+        body: {
+          changes: [{
+            kind: 'update', column: 'tags', value: ['gamma', 'delta'], originalValue: ['alpha', 'beta'],
+            identity: { id: 1 }, version: browsed.data.rowVersions![0],
+          }],
+        },
+      },
+    )
+    expect(updatedArray).toMatchObject({ ok: true, data: { affectedRows: 1 } })
   })
 
   it('PATCH /cell validates row identity and keeps primary keys read-only', async () => {

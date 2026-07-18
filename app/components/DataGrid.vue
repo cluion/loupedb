@@ -25,6 +25,7 @@ import {
   useTableColumnDisplay,
 } from '../stores/tableColumnDisplay'
 import { useTableFilterHistory, type TableFilterHistoryEntry } from '../stores/tableFilterHistory'
+import { cellContentValuesEqual, usesCellContentDialog } from '../utils/cellContent'
 import {
   normalizeGridRange,
   parseSpreadsheetTsv,
@@ -44,9 +45,10 @@ const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
 const { applyTableChanges, browse } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
 
-const INLINE_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
+const SCALAR_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
   'integer', 'decimal', 'string', 'boolean', 'datetime', 'date', 'time', 'uuid', 'enum',
 ])
+const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...SCALAR_EDIT_TYPES, 'json', 'array'])
 
 const result = ref<QueryResult | null>(null)
 const tableInfo = ref<TableSchema | null>(null)
@@ -114,6 +116,17 @@ interface CellEditorState {
   useNull: boolean
 }
 
+interface ActiveCellContent {
+  readonly rowIndex: number
+  readonly column: ColumnInfo
+  readonly value: unknown
+  readonly originalValue: unknown
+  readonly identity: Readonly<Record<string, unknown>> | null
+  readonly version: string | null
+  readonly nullable: boolean
+  readonly editable: boolean
+}
+
 interface PendingCellUpdate extends CellUpdateInput {
   readonly rowIndex: number
   readonly version: string
@@ -149,6 +162,7 @@ interface StagedRowInsert extends PendingRowInsert { readonly id: number; readon
 interface StagedRowDelete extends PendingRowDelete { readonly order: number }
 
 const editor = ref<CellEditorState | null>(null)
+const activeCellContent = ref<ActiveCellContent | null>(null)
 const pendingUpdate = ref<PendingCellUpdate | null>(null)
 const insertDraft = ref<InsertDraft | null>(null)
 const pendingInsert = ref<PendingRowInsert | null>(null)
@@ -408,7 +422,7 @@ function clearCellSelection() {
 }
 
 function startCellSelection(event: PointerEvent, row: number, column: number) {
-  if (event.button !== 0 || (event.target as HTMLElement).closest('.cell-editor')) return
+  if (event.button !== 0 || (event.target as HTMLElement).closest('.cell-editor, .cell-content-trigger')) return
   if (!event.shiftKey || !selectionAnchor.value) selectionAnchor.value = { row, column }
   selectionExtent.value = { row, column }
   selectionMessage.value = null
@@ -526,34 +540,49 @@ async function copyCellSelection() {
   }
 }
 
-function pastedUpdate(
-  row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo, value: string,
+function buildPendingCellUpdate(
+  rowIndex: number,
+  column: string,
+  value: unknown,
+  originalValue: unknown,
+  identity: Readonly<Record<string, unknown>>,
+  version: string,
 ): PendingCellUpdate {
-  const identity = identityFor(row)!.values
-  const version = rowVersion(rowIndex)!
-  const staged = stagedUpdateFor(row, column.name)
-  const originalValue = staged ? staged.originalValue : row[column.name]
   const identityEntries = Object.entries(identity)
   const params = [value, ...identityEntries.map(([, identityValue]) => identityValue), originalValue]
   const conditions = identityEntries.map(([identityColumn], index) =>
     `${quotePreviewIdentifier(identityColumn)} IS NOT DISTINCT FROM $${index + 2}`)
-  conditions.push(`${quotePreviewIdentifier(column.name)} IS NOT DISTINCT FROM $${params.length}`)
+  conditions.push(`${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${params.length}`)
   params.push(version)
   conditions.push(`xmin::text = $${params.length}`)
   return {
     schema: props.schema,
     table: props.table,
-    column: column.name,
+    column,
     value,
     originalValue,
     identity,
     version,
     rowIndex,
     sql: `UPDATE ${quotePreviewIdentifier(props.schema)}.${quotePreviewIdentifier(props.table)}\n`
-      + `SET ${quotePreviewIdentifier(column.name)} = $1\n`
+      + `SET ${quotePreviewIdentifier(column)} = $1\n`
       + `WHERE ${conditions.join('\n  AND ')};`,
     params,
   }
+}
+
+function pastedUpdate(
+  row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo, value: string,
+): PendingCellUpdate {
+  const staged = stagedUpdateFor(row, column.name)
+  return buildPendingCellUpdate(
+    rowIndex,
+    column.name,
+    value,
+    staged ? staged.originalValue : row[column.name],
+    identityFor(row)!.values,
+    rowVersion(rowIndex)!,
+  )
 }
 
 function stagePastedUpdates(updates: ReadonlyArray<PendingCellUpdate>): number {
@@ -566,12 +595,12 @@ function stagePastedUpdates(updates: ReadonlyArray<PendingCellUpdate>): number {
     next = next.filter((change) => !(
       identitySignature(change.identity) === signature && change.column === input.column
     ))
-    if (!Object.is(input.value, input.originalValue)) {
+    if (!cellContentValuesEqual(input.value, input.originalValue)) {
       next.push({ ...input, order: previous?.order ?? nextStagedChangeOrder++ })
     }
   }
   stagedUpdates.value = next
-  return updates.filter((update) => !Object.is(update.value, update.originalValue)).length
+  return updates.filter((update) => !cellContentValuesEqual(update.value, update.originalValue)).length
 }
 
 function pasteSpreadsheetText(text: string) {
@@ -603,7 +632,7 @@ function pasteSpreadsheetText(text: string) {
     const row = result.value.rows[rowIndex]!
     for (let columnOffset = 0; columnOffset < matrix[rowOffset]!.length; columnOffset++) {
       const column = visibleColumns.value[range.columnStart + columnOffset]!
-      if (!canEditCell(column, row, rowIndex)) {
+      if (!SCALAR_EDIT_TYPES.has(column.type) || !canEditCell(column, row, rowIndex)) {
         selectionError.value = `第 ${offset.value + rowIndex + 1} 列的 ${column.name} 不可安全貼上`
         return
       }
@@ -735,6 +764,7 @@ function nextPage() {
 
 function closeWritePanels() {
   editor.value = null
+  activeCellContent.value = null
   pendingUpdate.value = null
   insertDraft.value = null
   pendingInsert.value = null
@@ -811,7 +841,7 @@ function canEditCell(
     && !isStagedDelete(row)
     && !identity.columns.includes(column.name)
     && schemaColumn?.editable !== false
-    && INLINE_EDIT_TYPES.has(column.type)
+    && CELL_EDIT_TYPES.has(column.type)
 }
 
 function displayValue(value: unknown): string {
@@ -825,7 +855,52 @@ function cellValue(row: Readonly<Record<string, unknown>>, column: string): unkn
   return staged ? staged.value : row[column]
 }
 
+function openCellContent(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
+  const staged = stagedUpdateFor(row, column.name)
+  const identity = identityFor(row)
+  const version = rowVersion(rowIndex)
+  const schemaColumn = tableInfo.value?.columns.find((candidate) => candidate.name === column.name)
+  const value = staged ? staged.value : row[column.name]
+  const editable = canEditCell(column, row, rowIndex) && !saving.value
+  closeWritePanels()
+  activeCellContent.value = {
+    rowIndex,
+    column,
+    value,
+    originalValue: staged ? staged.originalValue : row[column.name],
+    identity: editable && identity ? identity.values : null,
+    version: editable ? version : null,
+    nullable: schemaColumn?.nullable ?? column.nullable,
+    editable,
+  }
+  notice.value = null
+}
+
+function activateCell(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
+  if (usesCellContentDialog(column.type, cellValue(row, column.name))) {
+    openCellContent(row, rowIndex, column)
+  } else beginEdit(row, rowIndex, column)
+}
+
+function prepareCellContentUpdate(value: unknown) {
+  const content = activeCellContent.value
+  if (!content?.editable || !content.identity || !content.version) return
+  pendingUpdate.value = buildPendingCellUpdate(
+    content.rowIndex,
+    content.column.name,
+    value,
+    content.originalValue,
+    content.identity,
+    content.version,
+  )
+  activeCellContent.value = null
+}
+
 function beginEdit(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
+  if (usesCellContentDialog(column.type, cellValue(row, column.name))) {
+    openCellContent(row, rowIndex, column)
+    return
+  }
   if (!canEditCell(column, row, rowIndex) || saving.value) return
   const identity = identityFor(row)
   const version = rowVersion(rowIndex)
@@ -857,32 +932,19 @@ function quotePreviewIdentifier(value: string): string {
 function prepareUpdate() {
   if (!editor.value) return
   const value = editor.value.useNull ? null : editor.value.value
-  const identityEntries = Object.entries(editor.value.identity)
-  const params = [value, ...identityEntries.map(([, identity]) => identity), editor.value.originalValue]
-  const conditions = identityEntries.map(([column], index) =>
-    `${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${index + 2}`)
-  conditions.push(`${quotePreviewIdentifier(editor.value.column)} IS NOT DISTINCT FROM $${params.length}`)
-  params.push(editor.value.version)
-  conditions.push(`xmin::text = $${params.length}`)
-  const sql = `UPDATE ${quotePreviewIdentifier(props.schema)}.${quotePreviewIdentifier(props.table)}\n`
-    + `SET ${quotePreviewIdentifier(editor.value.column)} = $1\n`
-    + `WHERE ${conditions.join('\n  AND ')};`
-  pendingUpdate.value = {
-    schema: props.schema,
-    table: props.table,
-    column: editor.value.column,
+  pendingUpdate.value = buildPendingCellUpdate(
+    editor.value.rowIndex,
+    editor.value.column,
     value,
-    originalValue: editor.value.originalValue,
-    identity: editor.value.identity,
-    version: editor.value.version,
-    rowIndex: editor.value.rowIndex,
-    sql,
-    params,
-  }
+    editor.value.originalValue,
+    editor.value.identity,
+    editor.value.version,
+  )
 }
 
 function parameterLabel(value: unknown): string {
   if (value === null) return 'NULL'
+  if (typeof value === 'object') return JSON.stringify(value) ?? String(value)
   return typeof value === 'string' ? JSON.stringify(value) : String(value)
 }
 
@@ -896,11 +958,12 @@ function stageUpdate() {
   stagedUpdates.value = stagedUpdates.value.filter((change) => !(
     identitySignature(change.identity) === signature && change.column === input.column
   ))
-  if (!Object.is(input.value, input.originalValue)) {
+  const unchanged = cellContentValuesEqual(input.value, input.originalValue)
+  if (!unchanged) {
     stagedUpdates.value.push({ ...input, order: previous?.order ?? nextStagedChangeOrder++ })
   }
   closeWritePanels()
-  notice.value = Object.is(input.value, input.originalValue) ? '已移除此欄位變更' : '已暫存 1 個欄位變更'
+  notice.value = unchanged ? '已移除此欄位變更' : '已暫存 1 個欄位變更'
 }
 
 function startInsert(source?: Readonly<Record<string, unknown>>) {
@@ -912,7 +975,7 @@ function startInsert(source?: Readonly<Record<string, unknown>>) {
     ...tableInfo.value.uniqueKeys.flatMap((key) => key.columns),
   ])
   const fields = tableInfo.value.columns
-    .filter((column) => column.insertable !== false && INLINE_EDIT_TYPES.has(column.type))
+    .filter((column) => column.insertable !== false && SCALAR_EDIT_TYPES.has(column.type))
     .map((column): InsertField => {
       if (!source) {
         return {
@@ -1073,7 +1136,7 @@ async function applyAll() {
     <div v-if="metadataError" role="alert">{{ metadataError }}</div>
     <p v-if="tableInfo" class="editability" data-testid="editability-status">
       <template v-if="isConnectionReadOnly">Read-only 連線：資料僅供瀏覽，新增、編輯與刪除皆停用</template>
-      <template v-else-if="tableInfo.primaryKey.length">可編輯：使用 primary key 安全定位；雙擊非鍵純量欄位</template>
+      <template v-else-if="tableInfo.primaryKey.length">可編輯：使用 primary key 安全定位；雙擊非鍵欄位</template>
       <template v-else-if="tableInfo.uniqueKeys.length">可編輯：使用 unique key 安全定位；NULL 唯一鍵資料列維持唯讀</template>
       <template v-else>無 primary key 或 unique key：可新增或 Clone，但既有資料唯讀且不可刪除</template>
     </p>
@@ -1278,12 +1341,14 @@ async function applyAll() {
               }"
               tabindex="0"
               :aria-selected="isSelectedCell(i, columnIndex) ? 'true' : undefined"
-              :title="canEditCell(c, row, i) ? '拖曳選取；雙擊或按 Enter 編輯' : '拖曳選取'"
+              :title="usesCellContentDialog(c.type, cellValue(row, c.name))
+                ? '點擊展開完整內容'
+                : canEditCell(c, row, i) ? '拖曳選取；雙擊或按 Enter 編輯' : '拖曳選取'"
               @pointerdown="startCellSelection($event, i, columnIndex)"
               @pointerenter="extendCellSelection(i, columnIndex)"
-              @dblclick="beginEdit(row, i, c)"
+              @dblclick="activateCell(row, i, c)"
               @keydown="handleCellKeydown($event, i, columnIndex)"
-              @keydown.enter.prevent="beginEdit(row, i, c)"
+              @keydown.enter.prevent="activateCell(row, i, c)"
             >
               <div
                 v-if="editor?.rowIndex === i && editor.column === c.name"
@@ -1304,6 +1369,17 @@ async function applyAll() {
                 <button type="button" :disabled="Boolean(pendingUpdate)" @click="prepareUpdate">預覽寫入</button>
                 <button type="button" class="ghost" @click="cancelEdit">取消</button>
               </div>
+              <button
+                v-else-if="usesCellContentDialog(c.type, cellValue(row, c.name))"
+                type="button"
+                class="cell-content-trigger"
+                :aria-label="`開啟 ${c.name} 第 ${offset + i + 1} 列完整內容`"
+                @click.stop="openCellContent(row, i, c)"
+                @keydown.stop
+              >
+                <span>{{ displayValue(cellValue(row, c.name)) }}</span>
+                <span aria-hidden="true">↗</span>
+              </button>
               <template v-else>{{ displayValue(cellValue(row, c.name)) }}</template>
             </td>
             <td class="row-actions">
@@ -1346,6 +1422,17 @@ async function applyAll() {
     </div>
     <p v-if="selectionMessage" class="selection-message" role="status">{{ selectionMessage }}</p>
     <p v-if="selectionError" class="selection-error" role="alert">{{ selectionError }}</p>
+    <CellContentDialog
+      v-if="activeCellContent"
+      :key="`${activeCellContent.rowIndex}:${activeCellContent.column.name}`"
+      :column="activeCellContent.column"
+      :row-number="offset + activeCellContent.rowIndex + 1"
+      :value="activeCellContent.value"
+      :nullable="activeCellContent.nullable"
+      :editable="activeCellContent.editable"
+      @close="activeCellContent = null"
+      @preview="prepareCellContentUpdate"
+    />
     <section
       v-if="insertDraft && !pendingInsert"
       class="row-insert"
@@ -1585,6 +1672,10 @@ tbody td:not(.row-actions) { user-select: none; }
 .cell-editor { display: flex; align-items: center; gap: 6px; color: var(--text); font-style: normal; }
 .cell-editor > input[type="text"], .cell-editor > input:not([type]) { min-width: 120px; flex: 1; }
 .cell-editor label { display: flex; align-items: center; gap: 3px; font-size: 11px; }
+.cell-content-trigger { display: inline-flex; max-width: 100%; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
+.cell-content-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.cell-content-trigger span:last-child { color: var(--brass); font-size: 10px; }
+.cell-content-trigger:hover { border: 0; background: transparent; color: var(--brass); }
 .row-actions { display: flex; gap: 4px; overflow: visible; max-width: none; }
 .delete-row { color: var(--danger); }
 .dirty-badge { color: var(--brass); font: 10px var(--font-data); letter-spacing: 0.08em; }

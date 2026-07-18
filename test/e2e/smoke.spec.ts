@@ -195,6 +195,36 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await page.getByRole('button', { name: '全部套用 1 項' }).click()
   await expect(page.getByRole('cell', { name: 'unique edited', exact: true })).not.toBeVisible()
 
+  // JSON, PostgreSQL arrays and large text use a complete-content dialog
+  await page.getByRole('button', { name: 'content_items', exact: true }).click()
+  await page.getByRole('button', { name: '開啟 document 第 1 列完整內容' }).click()
+  const jsonDialog = page.getByRole('dialog', { name: '檢視與編輯 document 第 1 列' })
+  await expect(jsonDialog.getByLabel('document 完整內容')).toHaveValue(/"status": "draft"/u)
+  await jsonDialog.getByLabel('document 完整內容').fill('{"status":"published","count":2}')
+  await jsonDialog.getByRole('button', { name: '格式化' }).click()
+  await expect(jsonDialog.getByLabel('document 完整內容')).toHaveValue(/\n {2}"count": 2\n/u)
+  await jsonDialog.getByRole('button', { name: '預覽寫入' }).click()
+  await expect(page.getByRole('dialog', { name: '確認資料寫入' })).toContainText(
+    '{"status":"published","count":2}',
+  )
+  await page.getByRole('button', { name: '暫存更新' }).click()
+
+  await page.getByRole('button', { name: '開啟 tags 第 1 列完整內容' }).click()
+  const arrayDialog = page.getByRole('dialog', { name: '檢視與編輯 tags 第 1 列' })
+  await expect(arrayDialog.getByLabel('tags 完整內容')).toHaveValue(/"alpha"/u)
+  await arrayDialog.getByLabel('tags 完整內容').fill('["gamma","delta"]')
+  await arrayDialog.getByRole('button', { name: '預覽寫入' }).click()
+  await page.getByRole('button', { name: '暫存更新' }).click()
+  await expect(page.getByTestId('staged-changes')).toContainText('待套用變更・2')
+  await page.getByRole('button', { name: '全部套用 2 項' }).click()
+  await expect(page.getByRole('button', { name: '開啟 document 第 1 列完整內容' })).toContainText('published')
+  await expect(page.getByRole('button', { name: '開啟 tags 第 1 列完整內容' })).toContainText('gamma')
+
+  await page.getByRole('button', { name: '開啟 notes 第 1 列完整內容' }).click()
+  const textDialog = page.getByRole('dialog', { name: '檢視與編輯 notes 第 1 列' })
+  await expect(textDialog.getByLabel('notes 完整內容')).toHaveValue(/This is a long text value/u)
+  await textDialog.getByRole('button', { name: '取消' }).click()
+
   await page.getByRole('button', { name: 'items', exact: true }).click()
   await expect(page.locator('th[data-column="id"]')).toHaveCount(0)
   await expect(page.locator('th[data-column="label"]')).toHaveAttribute('style', /width: 240px/u)

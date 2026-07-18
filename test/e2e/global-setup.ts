@@ -13,6 +13,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await sql.unsafe(`insert into items (label) values ('x'), ('y')`).simple()
   await sql.unsafe(`create table contacts (email text not null unique, label text not null)`).simple()
   await sql.unsafe(`insert into contacts values ('unique@example.com', 'unique row')`).simple()
+  await sql.unsafe(`create table content_items (
+    id serial primary key,
+    document jsonb not null,
+    tags text[] not null,
+    notes text not null
+  )`).simple()
+  await sql.unsafe(`insert into content_items (document, tags, notes) values (
+    '{"status":"draft","count":1}',
+    array['alpha','beta'],
+    repeat('This is a long text value. ', 8)
+  )`).simple()
   await sql.unsafe(`create function double_value(value integer)
     returns integer language sql immutable as $$ select value * 2 $$`).simple()
   await sql.end()

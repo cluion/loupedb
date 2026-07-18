@@ -19,6 +19,30 @@ function result(rows: Array<Record<string, unknown>>): { ok: true; data: QueryRe
   }
 }
 
+const longNote = `line one\n${'long content '.repeat(12)}`
+
+function contentResult(): { ok: true; data: QueryResult } {
+  return {
+    ok: true,
+    data: {
+      columns: [
+        { name: 'id', nativeType: 'int4', type: 'integer', nullable: false },
+        { name: 'document', nativeType: 'jsonb', type: 'json', nullable: false },
+        { name: 'tags', nativeType: '_text', type: 'array', nullable: true },
+        { name: 'notes', nativeType: 'text', type: 'string', nullable: false },
+      ],
+      rows: [{
+        id: 1,
+        document: { status: 'draft', count: 1 },
+        tags: ['alpha', 'beta'],
+        notes: longNote,
+      }],
+      rowVersions: ['10'],
+      executionMs: 1,
+    },
+  }
+}
+
 const { applyTableChangesMock, browseMock, describeMock } = vi.hoisted(() => ({
   applyTableChangesMock: vi.fn(),
   browseMock: vi.fn(async (_s: string, _t: string, _o: BrowseOpts) =>
@@ -282,6 +306,75 @@ describe('DataGrid', () => {
     await vi.waitFor(() => expect(w.get('.selection-error').text()).toContain('id 不可安全貼上'))
     expect(w.find('[data-testid="staged-changes"]').exists()).toBe(false)
     expect(w.find('td.dirty').exists()).toBe(false)
+  })
+
+  it('edits JSON and array cells through dialogs and stages parsed values', async () => {
+    const content = contentResult()
+    browseMock.mockResolvedValue(content as never)
+    describeMock.mockResolvedValue({
+      ok: true,
+      data: {
+        schema: 'public', table: 'content_items', columns: content.data.columns,
+        primaryKey: ['id'], uniqueKeys: [], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, table: 'content_items', historyLabel: 'content-edit' },
+    })
+    await vi.waitFor(() => expect(w.get('[aria-label="開啟 document 第 1 列完整內容"]').exists()).toBe(true))
+
+    await w.get('[aria-label="開啟 document 第 1 列完整內容"]').trigger('click')
+    expect((w.get('[aria-label="document 完整內容"]').element as HTMLTextAreaElement).value)
+      .toContain('"status": "draft"')
+    await w.get('[aria-label="document 完整內容"]').setValue('{"status":"published","count":2}')
+    await w.get('.content-dialog').trigger('submit')
+    expect(w.get('[aria-label="確認資料寫入"]').text()).toContain('{"status":"published","count":2}')
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+
+    await w.get('[aria-label="開啟 tags 第 1 列完整內容"]').trigger('click')
+    await w.get('[aria-label="tags 完整內容"]').setValue('["gamma","delta"]')
+    await w.get('.content-dialog').trigger('submit')
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+    expect(w.get('[data-testid="staged-changes"]').text()).toContain('待套用變更・2')
+    expect(w.findAll('td.dirty')).toHaveLength(2)
+
+    await w.findAll('button').find(button => button.text() === '全部套用 2 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public',
+      table: 'content_items',
+      changes: [
+        {
+          kind: 'update', column: 'document',
+          value: { status: 'published', count: 2 }, originalValue: { status: 'draft', count: 1 },
+          identity: { id: 1 }, version: '10',
+        },
+        {
+          kind: 'update', column: 'tags',
+          value: ['gamma', 'delta'], originalValue: ['alpha', 'beta'],
+          identity: { id: 1 }, version: '10',
+        },
+      ],
+    }))
+  })
+
+  it('opens long text and structured cells in a view-only dialog without a safe key', async () => {
+    const content = contentResult()
+    browseMock.mockResolvedValue(content as never)
+    describeMock.mockResolvedValue({
+      ok: true,
+      data: {
+        schema: 'public', table: 'content_items', columns: content.data.columns,
+        primaryKey: [], uniqueKeys: [], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, table: 'content_items', historyLabel: 'content-view' },
+    })
+    await vi.waitFor(() => expect(w.get('[aria-label="開啟 notes 第 1 列完整內容"]').exists()).toBe(true))
+    await w.get('[aria-label="開啟 notes 第 1 列完整內容"]').trigger('click')
+    expect(w.get('[role="dialog"]').text()).toContain('僅供檢視')
+    expect((w.get('[aria-label="notes 完整內容"]').element as HTMLTextAreaElement).value).toBe(longNote)
+    expect(w.findAll('button').some(button => button.text() === '預覽寫入')).toBe(false)
   })
 
   it('stages and atomically applies one parameterized cell update by primary key', async () => {

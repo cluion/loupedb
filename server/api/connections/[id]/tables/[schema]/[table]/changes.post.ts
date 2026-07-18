@@ -1,5 +1,6 @@
 import { readBody } from 'h3'
 import type { TableChange, TableChangesInput } from '#shared/types'
+import { isCellMutationValue } from '#shared/cellValue'
 import { fail, withConnection } from '../../../../../../utils/api'
 import { assertMutationAllowed } from '../../../../../../security/connectionSafety'
 
@@ -36,8 +37,8 @@ function parseChange(value: unknown): TableChange | null {
   if (value.kind === 'update') {
     if (
       typeof value.column !== 'string' || !value.column
-      || !('value' in value) || !isScalar(value.value)
-      || !('originalValue' in value) || !isScalar(value.originalValue)
+      || !('value' in value) || !isCellMutationValue(value.value)
+      || !('originalValue' in value) || !isCellMutationValue(value.originalValue)
       || !isIdentity(value.identity) || !isVersion(value.version)
     ) return null
     return {
@@ -68,7 +69,7 @@ export default defineEventHandler(async (event) => {
   }
   const changes = body.changes.map(parseChange)
   if (changes.some((change) => change === null)) {
-    return invalid('every staged change must contain valid scalar values, identity and row version')
+    return invalid('every staged change must contain valid cell values, identity and row version')
   }
   const input: TableChangesInput = { schema, table, changes: changes as TableChange[] }
   return withConnection(event, id, (driver) => {

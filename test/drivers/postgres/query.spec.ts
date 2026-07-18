@@ -15,6 +15,11 @@ async function setup(): Promise<DatabaseDriver> {
   })
   await seedSql.unsafe(`create table items (id serial primary key, label text not null, qty int)`).simple()
   await seedSql.unsafe(`insert into items (label, qty) values ('a', 1), ('b', 2), ('c', 3)`).simple()
+  await seedSql.unsafe(`create table content_items (
+    id serial primary key, document jsonb not null, tags text[] not null, notes text not null
+  )`).simple()
+  await seedSql.unsafe(`insert into content_items (document, tags, notes)
+    values ('{"status":"draft","count":1}', array['alpha','beta'], 'long note')`).simple()
   await seedSql.end()
   const driver = createPostgresDriver({
     name: 't', driver: 'postgres', host: handle.config.host, port: handle.config.port,
@@ -57,6 +62,34 @@ describe('postgres driver execute/browse', () => {
       schema: 'public', table: 'items', column: 'label', value: 'overwritten',
       originalValue: 'a', identity: { id: 1 },
     })).rejects.toMatchObject({ code: 'ROW_CHANGED' })
+    await driver.disconnect()
+  })
+
+  it('updates JSON and PostgreSQL array cells with structured parameter values', async () => {
+    const driver = await setup()
+    const browsed = await driver.browse('public', 'content_items', { limit: 1, offset: 0 })
+    const result = await driver.applyTableChanges({
+      schema: 'public',
+      table: 'content_items',
+      changes: [
+        {
+          kind: 'update', column: 'document',
+          value: { status: 'published', count: 2 }, originalValue: { status: 'draft', count: 1 },
+          identity: { id: 1 }, version: browsed.rowVersions![0]!,
+        },
+        {
+          kind: 'update', column: 'tags',
+          value: ['gamma', 'delta'], originalValue: ['alpha', 'beta'],
+          identity: { id: 1 }, version: browsed.rowVersions![0]!,
+        },
+      ],
+    })
+    expect(result.affectedRows).toBe(2)
+    const after = await driver.execute('select document, tags from content_items where id = 1')
+    expect(after.rows).toEqual([{
+      document: { status: 'published', count: 2 },
+      tags: ['gamma', 'delta'],
+    }])
     await driver.disconnect()
   })
 

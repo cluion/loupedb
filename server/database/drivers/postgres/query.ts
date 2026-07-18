@@ -11,6 +11,7 @@ export interface CancellableQuery { cancel(): void }
 const INLINE_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
   'integer', 'decimal', 'string', 'boolean', 'datetime', 'date', 'time', 'uuid', 'enum',
 ])
+const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...INLINE_EDIT_TYPES, 'json', 'array'])
 
 interface ErrorWithMessages {
   messages?: ReadonlyArray<QueryMessage>
@@ -237,8 +238,8 @@ export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise
   if (!column || !column.updatable) {
     throw editError('READ_ONLY_COLUMN', 'column is not available for inline editing')
   }
-  if (!INLINE_EDIT_TYPES.has(column.type)) {
-    throw editError('READ_ONLY_COLUMN', `inline editing is not supported for ${column.native}`)
+  if (!CELL_EDIT_TYPES.has(column.type)) {
+    throw editError('READ_ONLY_COLUMN', `cell editing is not supported for ${column.native}`)
   }
 
   const key = await identityKey(sql, input.schema, input.table, input.identity)
