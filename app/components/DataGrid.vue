@@ -17,6 +17,7 @@ import {
   type TableChange,
   type TableSchema,
 } from '#shared/types'
+import { isBinaryCellSummary, isBinaryCellValue } from '#shared/binaryCell'
 import {
   DEFAULT_COLUMN_WIDTH,
   MAX_COLUMN_WIDTH,
@@ -26,6 +27,7 @@ import {
 } from '../stores/tableColumnDisplay'
 import { useTableFilterHistory, type TableFilterHistoryEntry } from '../stores/tableFilterHistory'
 import { cellContentValuesEqual, usesCellContentDialog } from '../utils/cellContent'
+import { binaryCellLabel } from '../utils/binaryCell'
 import {
   normalizeGridRange,
   parseSpreadsheetTsv,
@@ -42,13 +44,13 @@ const props = withDefaults(defineProps<{
   safetyMode?: ConnectionSafetyMode
 }>(), { database: '', historyLabel: '', safetyMode: 'normal' })
 const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
-const { applyTableChanges, browse } = useQuery(props.connectionId)
+const { applyTableChanges, browse, downloadBinaryCell } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
 
 const SCALAR_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
   'integer', 'decimal', 'string', 'boolean', 'datetime', 'date', 'time', 'uuid', 'enum',
 ])
-const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...SCALAR_EDIT_TYPES, 'json', 'array'])
+const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...SCALAR_EDIT_TYPES, 'json', 'array', 'binary'])
 
 const result = ref<QueryResult | null>(null)
 const tableInfo = ref<TableSchema | null>(null)
@@ -56,8 +58,10 @@ const error = ref<string | null>(null)
 const metadataError = ref<string | null>(null)
 const writeError = ref<string | null>(null)
 const notice = ref<string | null>(null)
+const binaryDownloadError = ref<string | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const downloadingBinary = ref(false)
 const limit = ref(50)
 const offset = ref(0)
 const orderBy = ref<string | undefined>(undefined)
@@ -509,7 +513,9 @@ function selectedRangeTsv(): string | null {
     const record = result.value.rows[row]!
     values.push(visibleColumns.value
       .slice(range.columnStart, range.columnEnd + 1)
-      .map((column) => cellValue(record, column.name)))
+      .map((column) => column.type === 'binary'
+        ? binaryCellLabel(cellValue(record, column.name))
+        : cellValue(record, column.name)))
   }
   return selectionToTsv(values)
 }
@@ -549,10 +555,19 @@ function buildPendingCellUpdate(
   version: string,
 ): PendingCellUpdate {
   const identityEntries = Object.entries(identity)
-  const params = [value, ...identityEntries.map(([, identityValue]) => identityValue), originalValue]
+  const params: unknown[] = [value, ...identityEntries.map(([, identityValue]) => identityValue)]
   const conditions = identityEntries.map(([identityColumn], index) =>
     `${quotePreviewIdentifier(identityColumn)} IS NOT DISTINCT FROM $${index + 2}`)
-  conditions.push(`${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${params.length}`)
+  const binaryColumn = tableInfo.value?.columns.find((candidate) => candidate.name === column)?.type === 'binary'
+  if (binaryColumn && isBinaryCellSummary(originalValue)) {
+    params.push(originalValue.byteLength)
+    conditions.push(`octet_length(${quotePreviewIdentifier(column)}) = $${params.length}`)
+    params.push(originalValue.checksum)
+    conditions.push(`md5(${quotePreviewIdentifier(column)}) = $${params.length}`)
+  } else {
+    params.push(originalValue)
+    conditions.push(`${quotePreviewIdentifier(column)} IS NOT DISTINCT FROM $${params.length}`)
+  }
   params.push(version)
   conditions.push(`xmin::text = $${params.length}`)
   return {
@@ -770,6 +785,7 @@ function closeWritePanels() {
   pendingInsert.value = null
   pendingDelete.value = null
   writeError.value = null
+  binaryDownloadError.value = null
 }
 
 function isScalar(value: unknown): boolean {
@@ -846,8 +862,13 @@ function canEditCell(
 
 function displayValue(value: unknown): string {
   if (value === null) return 'NULL'
+  if (isBinaryCellValue(value)) return binaryCellLabel(value)
   if (typeof value === 'object') return JSON.stringify(value) ?? String(value)
   return String(value)
+}
+
+function usesExpandedCell(column: ColumnInfo, value: unknown): boolean {
+  return column.type === 'binary' || usesCellContentDialog(column.type, value)
 }
 
 function cellValue(row: Readonly<Record<string, unknown>>, column: string): unknown {
@@ -868,16 +889,17 @@ function openCellContent(row: Readonly<Record<string, unknown>>, rowIndex: numbe
     column,
     value,
     originalValue: staged ? staged.originalValue : row[column.name],
-    identity: editable && identity ? identity.values : null,
-    version: editable ? version : null,
+    identity: identity ? identity.values : null,
+    version,
     nullable: schemaColumn?.nullable ?? column.nullable,
     editable,
   }
   notice.value = null
+  binaryDownloadError.value = null
 }
 
 function activateCell(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
-  if (usesCellContentDialog(column.type, cellValue(row, column.name))) {
+  if (usesExpandedCell(column, cellValue(row, column.name))) {
     openCellContent(row, rowIndex, column)
   } else beginEdit(row, rowIndex, column)
 }
@@ -897,7 +919,7 @@ function prepareCellContentUpdate(value: unknown) {
 }
 
 function beginEdit(row: Readonly<Record<string, unknown>>, rowIndex: number, column: ColumnInfo) {
-  if (usesCellContentDialog(column.type, cellValue(row, column.name))) {
+  if (usesExpandedCell(column, cellValue(row, column.name))) {
     openCellContent(row, rowIndex, column)
     return
   }
@@ -944,8 +966,44 @@ function prepareUpdate() {
 
 function parameterLabel(value: unknown): string {
   if (value === null) return 'NULL'
+  if (isBinaryCellValue(value)) return binaryCellLabel(value)
   if (typeof value === 'object') return JSON.stringify(value) ?? String(value)
   return typeof value === 'string' ? JSON.stringify(value) : String(value)
+}
+
+function activeBinaryDownloadable(): boolean {
+  return Boolean(
+    activeCellContent.value?.column.type === 'binary'
+    && activeCellContent.value.identity
+    && activeCellContent.value.version
+    && isBinaryCellSummary(activeCellContent.value.originalValue),
+  )
+}
+
+async function downloadActiveBinary() {
+  const content = activeCellContent.value
+  if (!content || content.column.type !== 'binary' || !content.identity || !content.version) return
+  downloadingBinary.value = true
+  binaryDownloadError.value = null
+  try {
+    const download = await downloadBinaryCell({
+      schema: props.schema,
+      table: props.table,
+      column: content.column.name,
+      identity: content.identity,
+      version: content.version,
+    })
+    const url = URL.createObjectURL(download.blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = download.fileName
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (cause) {
+    binaryDownloadError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    downloadingBinary.value = false
+  }
 }
 
 function stageUpdate() {
@@ -1341,7 +1399,7 @@ async function applyAll() {
               }"
               tabindex="0"
               :aria-selected="isSelectedCell(i, columnIndex) ? 'true' : undefined"
-              :title="usesCellContentDialog(c.type, cellValue(row, c.name))
+              :title="usesExpandedCell(c, cellValue(row, c.name))
                 ? '點擊展開完整內容'
                 : canEditCell(c, row, i) ? '拖曳選取；雙擊或按 Enter 編輯' : '拖曳選取'"
               @pointerdown="startCellSelection($event, i, columnIndex)"
@@ -1370,10 +1428,12 @@ async function applyAll() {
                 <button type="button" class="ghost" @click="cancelEdit">取消</button>
               </div>
               <button
-                v-else-if="usesCellContentDialog(c.type, cellValue(row, c.name))"
+                v-else-if="usesExpandedCell(c, cellValue(row, c.name))"
                 type="button"
                 class="cell-content-trigger"
-                :aria-label="`開啟 ${c.name} 第 ${offset + i + 1} 列完整內容`"
+                :aria-label="c.type === 'binary'
+                  ? `開啟 ${c.name} 第 ${offset + i + 1} 列 binary`
+                  : `開啟 ${c.name} 第 ${offset + i + 1} 列完整內容`"
                 @click.stop="openCellContent(row, i, c)"
                 @keydown.stop
               >
@@ -1422,8 +1482,23 @@ async function applyAll() {
     </div>
     <p v-if="selectionMessage" class="selection-message" role="status">{{ selectionMessage }}</p>
     <p v-if="selectionError" class="selection-error" role="alert">{{ selectionError }}</p>
+    <BinaryCellDialog
+      v-if="activeCellContent?.column.type === 'binary'"
+      :key="`${activeCellContent.rowIndex}:${activeCellContent.column.name}:binary`"
+      :column="activeCellContent.column"
+      :row-number="offset + activeCellContent.rowIndex + 1"
+      :value="activeCellContent.value"
+      :nullable="activeCellContent.nullable"
+      :editable="activeCellContent.editable"
+      :downloadable="activeBinaryDownloadable()"
+      :downloading="downloadingBinary"
+      :download-error="binaryDownloadError"
+      @close="activeCellContent = null"
+      @download="downloadActiveBinary"
+      @preview="prepareCellContentUpdate"
+    />
     <CellContentDialog
-      v-if="activeCellContent"
+      v-else-if="activeCellContent"
       :key="`${activeCellContent.rowIndex}:${activeCellContent.column.name}`"
       :column="activeCellContent.column"
       :row-number="offset + activeCellContent.rowIndex + 1"

@@ -1,4 +1,4 @@
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, ConnectionConfig, ConnectionStatus, DatabaseFunctionInfo, DatabaseInfo, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, SchemaInfo, TableChangesInput, TableChangesResult, TableColumnInfo, TableInfo, TableSchema, TransactionState } from '#shared/types'
+import type { BinaryCellReadInput, BinaryCellReadResult, BrowseOpts, CellUpdateInput, CellUpdateResult, ConnectionConfig, ConnectionStatus, DatabaseFunctionInfo, DatabaseInfo, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, SchemaInfo, TableChangesInput, TableChangesResult, TableColumnInfo, TableInfo, TableSchema, TransactionState } from '#shared/types'
 
 export interface DatabaseDriver {
   readonly config: ConnectionConfig
@@ -18,6 +18,7 @@ export interface DatabaseDriver {
   commitTransaction(): Promise<TransactionState>
   rollbackTransaction(): Promise<TransactionState>
   browse(schema: string, table: string, opts: BrowseOpts, queryId?: string): Promise<QueryResult>
+  readBinaryCell(input: BinaryCellReadInput): Promise<BinaryCellReadResult>
   updateCell(input: CellUpdateInput): Promise<CellUpdateResult>
   insertRow(input: RowInsertInput): Promise<RowMutationResult>
   deleteRow(input: RowDeleteInput): Promise<RowMutationResult>

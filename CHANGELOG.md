@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **Binary／`bytea` 欄位工具**：DataGrid 不再載入 binary 原始 bytes，只顯示大小與 MD5 摘要；具安全 row identity 的儲存格可用原始檔下載，並可選擇 8 MB 以內檔案，在不顯示 base64 的 parameterized SQL preview 後加入 staged changes。下載與上傳皆比對完整 primary／unique key 及 `xmin`，上傳套用時另以原始大小與 checksum 阻止覆蓋已變更內容
+
 ## [0.19.0] - 2026-07-19
 
 ### Added

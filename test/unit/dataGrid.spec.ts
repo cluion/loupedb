@@ -43,16 +43,39 @@ function contentResult(): { ok: true; data: QueryResult } {
   }
 }
 
-const { applyTableChangesMock, browseMock, describeMock } = vi.hoisted(() => ({
+const binarySummary = {
+  $loupedb: 'binary' as const,
+  byteLength: 4,
+  checksum: '37b59afd592725f9305e484a5d7f5168',
+}
+
+function binaryResult(): { ok: true; data: QueryResult } {
+  return {
+    ok: true,
+    data: {
+      columns: [
+        { name: 'id', nativeType: 'int4', type: 'integer', nullable: false },
+        { name: 'payload', nativeType: 'bytea', type: 'binary', nullable: true },
+      ],
+      rows: [{ id: 1, payload: binarySummary }],
+      rowVersions: ['10'],
+      executionMs: 1,
+    },
+  }
+}
+
+const { applyTableChangesMock, browseMock, describeMock, downloadBinaryCellMock } = vi.hoisted(() => ({
   applyTableChangesMock: vi.fn(),
   browseMock: vi.fn(async (_s: string, _t: string, _o: BrowseOpts) =>
     ({ ok: true, data: { columns: [], rows: [], executionMs: 0 } })),
   describeMock: vi.fn(),
+  downloadBinaryCellMock: vi.fn(),
 }))
 
 mockNuxtImport('useQuery', () => () => ({
   browse: browseMock,
   applyTableChanges: applyTableChangesMock,
+  downloadBinaryCell: downloadBinaryCellMock,
   execute: vi.fn(), cancel: vi.fn(), streamUrl: vi.fn(),
 }))
 mockNuxtImport('useSchema', () => () => ({ describe: describeMock }))
@@ -80,6 +103,8 @@ beforeEach(() => {
   applyTableChangesMock.mockImplementation(async (input: { changes: unknown[] }) => ({
     ok: true, data: { affectedRows: input.changes.length, results: [] },
   }))
+  downloadBinaryCellMock.mockReset()
+  downloadBinaryCellMock.mockResolvedValue({ blob: new Blob(['binary']), fileName: 'payload.bin' })
 })
 
 describe('DataGrid', () => {
@@ -375,6 +400,90 @@ describe('DataGrid', () => {
     expect(w.get('[role="dialog"]').text()).toContain('僅供檢視')
     expect((w.get('[aria-label="notes 完整內容"]').element as HTMLTextAreaElement).value).toBe(longNote)
     expect(w.findAll('button').some(button => button.text() === '預覽寫入')).toBe(false)
+  })
+
+  it('summarizes, downloads and stages a binary file without exposing base64 in SQL preview', async () => {
+    const binary = binaryResult()
+    browseMock.mockResolvedValue(binary as never)
+    describeMock.mockResolvedValue({
+      ok: true,
+      data: {
+        schema: 'public', table: 'binary_items',
+        columns: binary.data.columns.map((column) => ({ ...column, editable: true })),
+        primaryKey: ['id'], uniqueKeys: [], foreignKeys: [],
+      },
+    })
+    const createObjectURL = vi.fn(() => 'blob:binary')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, table: 'binary_items', historyLabel: 'binary-edit' },
+    })
+    await vi.waitFor(() => expect(w.get('[aria-label="開啟 payload 第 1 列 binary"]').exists()).toBe(true))
+    expect(w.get('[aria-label="開啟 payload 第 1 列 binary"]').text()).toContain('BINARY · 4 B')
+    await w.get('[aria-label="開啟 payload 第 1 列 binary"]').trigger('click')
+
+    await w.findAll('button').find(button => button.text() === '下載原始內容')!.trigger('click')
+    await vi.waitFor(() => expect(downloadBinaryCellMock).toHaveBeenCalledWith({
+      schema: 'public', table: 'binary_items', column: 'payload', identity: { id: 1 }, version: '10',
+    }))
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(click).toHaveBeenCalled()
+
+    const input = w.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File([Uint8Array.from([1, 2, 3])], 'three.bin', { type: 'application/octet-stream' })],
+    })
+    await input.trigger('change')
+    await vi.waitFor(() => expect(w.get('[data-testid="selected-binary-file"]').text()).toContain('three.bin'))
+    await w.get('.binary-dialog').trigger('submit')
+    const preview = w.get('[aria-label="確認資料寫入"]')
+    expect(preview.text()).toContain('octet_length("payload")')
+    expect(preview.text()).toContain('md5("payload")')
+    expect(preview.text()).toContain('BINARY · 3 B · three.bin')
+    expect(preview.text()).not.toContain('AQID')
+    await w.findAll('button').find(button => button.text() === '暫存更新')!.trigger('click')
+    await w.findAll('button').find(button => button.text() === '全部套用 1 項')!.trigger('click')
+    await vi.waitFor(() => expect(applyTableChangesMock).toHaveBeenCalledWith({
+      schema: 'public',
+      table: 'binary_items',
+      changes: [{
+        kind: 'update', column: 'payload',
+        value: {
+          $loupedb: 'binary-upload', base64: 'AQID', byteLength: 3,
+          fileName: 'three.bin', mediaType: 'application/octet-stream',
+        },
+        originalValue: binarySummary,
+        identity: { id: 1 },
+        version: '10',
+      }],
+    }))
+    click.mockRestore()
+    vi.unstubAllGlobals()
+  })
+
+  it('allows binary downloads but not uploads on a Read-only connection', async () => {
+    const binary = binaryResult()
+    browseMock.mockResolvedValue(binary as never)
+    describeMock.mockResolvedValue({
+      ok: true,
+      data: {
+        schema: 'public', table: 'binary_items', columns: binary.data.columns,
+        primaryKey: ['id'], uniqueKeys: [], foreignKeys: [],
+      },
+    })
+    const w = await mountSuspended(DataGrid, {
+      props: {
+        ...props, table: 'binary_items', historyLabel: 'binary-read-only', safetyMode: 'read-only',
+      },
+    })
+    await vi.waitFor(() => expect(w.get('[aria-label="開啟 payload 第 1 列 binary"]').exists()).toBe(true))
+    await w.get('[aria-label="開啟 payload 第 1 列 binary"]').trigger('click')
+    expect(w.find('input[type="file"]').exists()).toBe(false)
+    expect(w.findAll('button').find(button => button.text() === '下載原始內容')!.attributes('disabled'))
+      .toBeUndefined()
   })
 
   it('stages and atomically applies one parameterized cell update by primary key', async () => {

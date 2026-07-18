@@ -1,4 +1,27 @@
-import type { BrowseOpts, CellUpdateInput, CellUpdateResult, Envelope, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, ScriptExecutionResult, TableChangesInput, TableChangesResult, TransactionState } from '#shared/types'
+import type { BinaryCellReadInput, BrowseOpts, CellUpdateInput, CellUpdateResult, Envelope, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult, ScriptExecutionResult, TableChangesInput, TableChangesResult, TransactionState } from '#shared/types'
+
+function responseFileName(response: Response, fallback: string): string {
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/iu)?.[1]
+  if (encoded) {
+    try { return decodeURIComponent(encoded) } catch { /* use the fallback */ }
+  }
+  return fallback
+}
+
+async function responseError(response: Response): Promise<Error> {
+  try {
+    const payload = await response.json() as {
+      ok?: boolean
+      error?: { message?: string }
+      message?: string
+      statusMessage?: string
+    }
+    return new Error(payload.error?.message ?? payload.message ?? payload.statusMessage ?? 'binary download failed')
+  } catch {
+    return new Error(`binary download failed (${response.status})`)
+  }
+}
 
 export function useQuery(connId: string) {
   return {
@@ -73,6 +96,24 @@ export function useQuery(connId: string) {
           body: { changes: input.changes, ...(confirmedDangerous ? { confirmedDangerous } : {}) },
         },
       )
+    },
+    async downloadBinaryCell(input: BinaryCellReadInput) {
+      const schema = encodeURIComponent(input.schema)
+      const table = encodeURIComponent(input.table)
+      const response = await fetch(`/api/connections/${connId}/tables/${schema}/${table}/binary`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          column: input.column, identity: input.identity, version: input.version,
+        }),
+      })
+      if (!response.ok || response.headers.get('content-type')?.includes('application/json')) {
+        throw await responseError(response)
+      }
+      return {
+        blob: await response.blob(),
+        fileName: responseFileName(response, `${input.table}-${input.column}.bin`),
+      }
     },
     async cancel(queryId: string) {
       return await $fetch<Envelope<void>>(`/api/connections/${connId}/cancel`, {

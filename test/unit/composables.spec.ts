@@ -157,6 +157,29 @@ describe('useQuery', () => {
     })
   })
 
+  it('downloads a binary cell with identity and row version', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      Uint8Array.from([1, 2, 3]),
+      {
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-disposition': "attachment; filename*=UTF-8''payload.bin",
+        },
+      },
+    ))
+    const result = await useQuery('c1').downloadBinaryCell({
+      schema: 'public', table: 'daily items', column: 'payload', identity: { id: 7 }, version: '42',
+    })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/connections/c1/tables/public/daily%20items/binary', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ column: 'payload', identity: { id: 7 }, version: '42' }),
+    })
+    expect(result.fileName).toBe('payload.bin')
+    expect(result.blob.size).toBe(3)
+    fetchSpy.mockRestore()
+  })
+
   it('cancel posts queryId', async () => {
     await useQuery('c1').cancel('q9')
     expect(fetchMock).toHaveBeenCalledWith('/api/connections/c1/cancel', {

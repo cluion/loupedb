@@ -216,7 +216,12 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   await arrayDialog.getByRole('button', { name: '預覽寫入' }).click()
   await page.getByRole('button', { name: '暫存更新' }).click()
   await expect(page.getByTestId('staged-changes')).toContainText('待套用變更・2')
+  const contentReloaded = page.waitForResponse((response) => (
+    response.url().includes('/browse') && response.request().method() === 'POST'
+  ))
   await page.getByRole('button', { name: '全部套用 2 項' }).click()
+  await contentReloaded
+  await expect(page.getByRole('status')).toContainText('已套用 2 項變更')
   await expect(page.getByRole('button', { name: '開啟 document 第 1 列完整內容' })).toContainText('published')
   await expect(page.getByRole('button', { name: '開啟 tags 第 1 列完整內容' })).toContainText('gamma')
 
@@ -224,6 +229,47 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   const textDialog = page.getByRole('dialog', { name: '檢視與編輯 notes 第 1 列' })
   await expect(textDialog.getByLabel('notes 完整內容')).toHaveValue(/This is a long text value/u)
   await textDialog.getByRole('button', { name: '取消' }).click()
+
+  // bytea cells show metadata, download raw bytes and stage bounded uploads
+  await page.getByRole('button', { name: 'binary_items', exact: true }).click()
+  const binaryTrigger = page.getByRole('button', { name: '開啟 payload 第 1 列 binary' })
+  await expect(binaryTrigger).toContainText('BINARY · 7 B')
+  await binaryTrigger.click()
+  const binaryDialog = page.getByRole('dialog', { name: '檢視與編輯 payload 第 1 列 binary' })
+  await expect(binaryDialog).toContainText('MD5')
+  const originalDownloadPromise = page.waitForEvent('download')
+  await binaryDialog.getByRole('button', { name: '下載原始內容' }).click()
+  const originalDownload = await originalDownloadPromise
+  expect(originalDownload.suggestedFilename()).toBe('binary_items-payload.bin')
+  expect([...readFileSync((await originalDownload.path())!)]).toEqual([0, 76, 111, 117, 112, 101, 255])
+
+  await binaryDialog.getByLabel('payload 上傳檔案').setInputFiles({
+    name: 'updated.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([9, 8, 7, 6, 5]),
+  })
+  await expect(binaryDialog.getByTestId('selected-binary-file')).toContainText('updated.bin')
+  await binaryDialog.getByRole('button', { name: '預覽寫入' }).click()
+  const binaryPreview = page.getByRole('dialog', { name: '確認資料寫入' })
+  await expect(binaryPreview).toContainText('octet_length("payload")')
+  await expect(binaryPreview).toContainText('BINARY · 5 B · updated.bin')
+  await expect(binaryPreview).not.toContainText('CQgHBgU=')
+  await page.getByRole('button', { name: '暫存更新' }).click()
+  await expect(page.getByTestId('staged-changes')).toContainText('updated.bin')
+  const binaryReloaded = page.waitForResponse((response) => (
+    response.url().includes('/browse') && response.request().method() === 'POST'
+  ))
+  await page.getByRole('button', { name: '全部套用 1 項' }).click()
+  await binaryReloaded
+  await expect(page.getByRole('status')).toContainText('已套用 1 項變更')
+  await expect(binaryTrigger).toContainText('BINARY · 5 B')
+
+  await binaryTrigger.click()
+  const updatedDownloadPromise = page.waitForEvent('download')
+  await page.getByRole('dialog', { name: '檢視與編輯 payload 第 1 列 binary' })
+    .getByRole('button', { name: '下載原始內容' }).click()
+  const updatedDownload = await updatedDownloadPromise
+  expect([...readFileSync((await updatedDownload.path())!)]).toEqual([9, 8, 7, 6, 5])
+  await page.getByRole('dialog', { name: '檢視與編輯 payload 第 1 列 binary' })
+    .getByRole('button', { name: '取消' }).click()
 
   await page.getByRole('button', { name: 'items', exact: true }).click()
   await expect(page.locator('th[data-column="id"]')).toHaveCount(0)

@@ -24,6 +24,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     array['alpha','beta'],
     repeat('This is a long text value. ', 8)
   )`).simple()
+  await sql.unsafe(`create table binary_items (
+    id serial primary key,
+    payload bytea
+  )`).simple()
+  await sql.unsafe(`insert into binary_items (payload)
+    values (decode('004c6f757065ff', 'hex'))`).simple()
   await sql.unsafe(`create function double_value(value integer)
     returns integer language sql immutable as $$ select value * 2 $$`).simple()
   await sql.end()

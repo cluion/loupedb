@@ -158,6 +158,32 @@ export interface CellUpdateInput {
   readonly version?: string
 }
 
+export interface BinaryCellSummary {
+  readonly $loupedb: 'binary'
+  readonly byteLength: number
+  readonly checksum: string
+}
+
+export interface BinaryCellUpload {
+  readonly $loupedb: 'binary-upload'
+  readonly base64: string
+  readonly byteLength: number
+  readonly fileName: string
+  readonly mediaType: string
+}
+
+export interface BinaryCellReadInput {
+  readonly schema: string
+  readonly table: string
+  readonly column: string
+  readonly identity: Readonly<Record<string, unknown>>
+  readonly version: string
+}
+
+export interface BinaryCellReadResult {
+  readonly data: Uint8Array | null
+}
+
 export interface CellUpdateResult {
   readonly affectedRows: 1
   readonly row: Readonly<Record<string, unknown>>

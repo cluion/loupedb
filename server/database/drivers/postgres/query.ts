@@ -1,6 +1,8 @@
 import type postgres from 'postgres'
-import type { BrowseFilterCondition, BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
+import { createHash } from 'node:crypto'
+import type { BinaryCellReadInput, BinaryCellReadResult, BinaryCellSummary, BrowseFilterCondition, BrowseOpts, CellUpdateInput, CellUpdateResult, ColumnInfo, NormalizedType, QueryMessage, QueryResult, RowDeleteInput, RowInsertInput, RowMutationResult } from '#shared/types'
 import { BROWSE_FILTER_OPERATORS, MAX_BROWSE_FILTERS, VALUELESS_BROWSE_FILTER_OPERATORS } from '#shared/types'
+import { isBinaryCellSummary, isBinaryCellUpload } from '#shared/binaryCell'
 import { normalizePgType } from '../../core/normalizer'
 import { listUniqueKeys } from './schema'
 
@@ -11,7 +13,7 @@ export interface CancellableQuery { cancel(): void }
 const INLINE_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([
   'integer', 'decimal', 'string', 'boolean', 'datetime', 'date', 'time', 'uuid', 'enum',
 ])
-const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...INLINE_EDIT_TYPES, 'json', 'array'])
+const CELL_EDIT_TYPES: ReadonlySet<NormalizedType> = new Set([...INLINE_EDIT_TYPES, 'json', 'array', 'binary'])
 
 interface ErrorWithMessages {
   messages?: ReadonlyArray<QueryMessage>
@@ -59,6 +61,26 @@ interface TableColumnMetadata {
   readonly type: NormalizedType
   readonly updatable: boolean
   readonly insertable: boolean
+}
+
+function summarizeBinaryValue(value: unknown): BinaryCellSummary | null {
+  if (value === null) return null
+  if (!(value instanceof Uint8Array)) throw editError('INVALID_BINARY', 'binary column returned an invalid value')
+  return {
+    $loupedb: 'binary',
+    byteLength: value.byteLength,
+    checksum: createHash('md5').update(value).digest('hex'),
+  }
+}
+
+function summarizeBinaryRow(
+  row: Readonly<Record<string, unknown>>, columns: ReadonlyArray<TableColumnMetadata>,
+): Readonly<Record<string, unknown>> {
+  const result = { ...row }
+  for (const column of columns) {
+    if (column.type === 'binary') result[column.name] = summarizeBinaryValue(result[column.name])
+  }
+  return result
 }
 
 async function tableColumnMetadata(sql: Sql, schema: string, table: string): Promise<TableColumnMetadata[]> {
@@ -180,9 +202,21 @@ export async function browseTable(
   activeQueries: Map<string, CancellableQuery>, oidCache: Map<number, string>,
 ): Promise<QueryResult> {
   const colRows = await sql`
-    select column_name from information_schema.columns
-    where table_schema = ${schema} and table_name = ${table}`
-  const validCols = new Set(colRows.map((r) => String(r.column_name)))
+    select c.column_name as name, c.udt_name as native, t.typtype as type_kind
+    from information_schema.columns c
+    join pg_type t on t.typname = c.udt_name
+    join pg_namespace tn on tn.oid = t.typnamespace and tn.nspname = c.udt_schema
+    where c.table_schema = ${schema} and c.table_name = ${table}
+    order by c.ordinal_position`
+  const tableColumns = colRows.map((row) => {
+    const native = String(row.native)
+    return {
+      name: String(row.name),
+      native,
+      type: row.type_kind === 'e' ? 'enum' as const : normalizePgType(native),
+    }
+  })
+  const validCols = new Set(tableColumns.map((column) => column.name))
 
   // ops are interpolated into SQL - runtime whitelist required because BrowseOpts
   // arrives from API request bodies where TS types do not hold
@@ -215,7 +249,12 @@ export async function browseTable(
   const whereClause = where.length ? ` where (${where.join(filterCombinator)})` : ''
   let versionColumn = '__loupedb_xmin'
   while (validCols.has(versionColumn)) versionColumn += '_'
-  const text = `select *, xmin::text as ${quoteIdent(versionColumn)}`
+  const selectedColumns = tableColumns.map((column) => column.type === 'binary'
+    ? `case when ${quoteIdent(column.name)} is null then null else json_build_object(`
+      + `'$loupedb', 'binary', 'byteLength', octet_length(${quoteIdent(column.name)}), `
+      + `'checksum', md5(${quoteIdent(column.name)})) end as ${quoteIdent(column.name)}`
+    : quoteIdent(column.name))
+  const text = `select ${selectedColumns.join(', ')}, xmin::text as ${quoteIdent(versionColumn)}`
     + ` from ${quoteIdent(schema)}.${quoteIdent(table)}${whereClause}${orderClause}`
     + ` limit $${params.length + 1} offset $${params.length + 2}`
   const result = await executeUnsafe(
@@ -223,7 +262,12 @@ export async function browseTable(
   )
   return {
     ...result,
-    columns: result.columns.filter((column) => column.name !== versionColumn),
+    columns: result.columns.filter((column) => column.name !== versionColumn).map((column) => {
+      const metadata = tableColumns.find((candidate) => candidate.name === column.name)
+      return metadata
+        ? { ...column, nativeType: metadata.native, type: metadata.type }
+        : column
+    }),
     rows: result.rows.map((row) => {
       const { [versionColumn]: _version, ...data } = row
       return data
@@ -247,11 +291,33 @@ export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise
     throw editError('READ_ONLY_COLUMN', 'row identity columns are read-only')
   }
 
-  const params: unknown[] = [input.value]
+  let mutationValue = input.value
+  if (column.type === 'binary') {
+    if (input.value !== null) {
+      if (!isBinaryCellUpload(input.value)) {
+        throw editError('INVALID_BINARY', 'binary updates require a valid uploaded file')
+      }
+      mutationValue = Buffer.from(input.value.base64, 'base64')
+      if ((mutationValue as Buffer).byteLength !== input.value.byteLength) {
+        throw editError('INVALID_BINARY', 'binary upload size does not match its content')
+      }
+    }
+  }
+
+  const params: unknown[] = [mutationValue]
   const rowConditions = identityConditions(input.identity, key, params)
-  params.push(input.originalValue)
-  const originalCondition = `${quoteIdent(input.column)} is not distinct from $${params.length}`
-  rowConditions.push(originalCondition)
+  if (column.type === 'binary' && input.originalValue !== null) {
+    if (!isBinaryCellSummary(input.originalValue)) {
+      throw editError('INVALID_BINARY', 'binary update is missing its original summary')
+    }
+    params.push(input.originalValue.byteLength)
+    rowConditions.push(`octet_length(${quoteIdent(input.column)}) = $${params.length}`)
+    params.push(input.originalValue.checksum)
+    rowConditions.push(`md5(${quoteIdent(input.column)}) = $${params.length}`)
+  } else {
+    params.push(input.originalValue)
+    rowConditions.push(`${quoteIdent(input.column)} is not distinct from $${params.length}`)
+  }
   if (input.version !== undefined) {
     if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
     params.push(input.version)
@@ -265,7 +331,33 @@ export async function updateTableCell(sql: Sql, input: CellUpdateInput): Promise
   if (rows.length !== 1) {
     throw editError('ROW_CHANGED', 'row changed or disappeared; reload before editing again')
   }
-  return { affectedRows: 1, row: { ...rows[0] } }
+  return { affectedRows: 1, row: summarizeBinaryRow(rows[0]!, columns) }
+}
+
+export async function readTableBinaryCell(sql: Sql, input: BinaryCellReadInput): Promise<BinaryCellReadResult> {
+  const columns = await tableColumnMetadata(sql, input.schema, input.table)
+  const column = columns.find((candidate) => candidate.name === input.column)
+  if (!column || column.type !== 'binary') {
+    throw editError('READ_ONLY_COLUMN', 'column is not available as binary data')
+  }
+  if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
+  const key = await identityKey(sql, input.schema, input.table, input.identity)
+  const params: unknown[] = []
+  const conditions = identityConditions(input.identity, key, params)
+  params.push(input.version)
+  conditions.push(`xmin::text = $${params.length}`)
+  const rows = await sql.unsafe(
+    `select ${quoteIdent(input.column)} from ${quoteIdent(input.schema)}.${quoteIdent(input.table)}`
+      + ` where ${conditions.join(' and ')}`,
+    params as never[],
+  )
+  if (rows.length !== 1) {
+    throw editError('ROW_CHANGED', 'row changed or disappeared; reload before downloading again')
+  }
+  const value = rows[0]![input.column]
+  if (value === null) return { data: null }
+  if (!(value instanceof Uint8Array)) throw editError('INVALID_BINARY', 'binary column returned an invalid value')
+  return { data: Buffer.from(value) }
 }
 
 export async function insertTableRow(sql: Sql, input: RowInsertInput): Promise<RowMutationResult> {
@@ -289,10 +381,11 @@ export async function insertTableRow(sql: Sql, input: RowInsertInput): Promise<R
     : `insert into ${quoteIdent(input.schema)}.${quoteIdent(input.table)} default values returning *`
   const rows = await sql.unsafe(text, params as never[])
   if (rows.length !== 1) throw editError('ROW_CHANGED', 'insert did not return exactly one row')
-  return { affectedRows: 1, row: { ...rows[0] } }
+  return { affectedRows: 1, row: summarizeBinaryRow(rows[0]!, columns) }
 }
 
 export async function deleteTableRow(sql: Sql, input: RowDeleteInput): Promise<RowMutationResult> {
+  const columns = await tableColumnMetadata(sql, input.schema, input.table)
   if (!/^\d+$/u.test(input.version)) throw editError('INVALID_IDENTITY', 'row version is invalid')
   const key = await identityKey(sql, input.schema, input.table, input.identity)
   const params: unknown[] = []
@@ -305,5 +398,5 @@ export async function deleteTableRow(sql: Sql, input: RowDeleteInput): Promise<R
   if (rows.length !== 1) {
     throw editError('ROW_CHANGED', 'row changed or disappeared; reload before deleting it')
   }
-  return { affectedRows: 1, row: { ...rows[0] } }
+  return { affectedRows: 1, row: summarizeBinaryRow(rows[0]!, columns) }
 }

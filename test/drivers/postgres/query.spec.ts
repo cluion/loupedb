@@ -20,6 +20,10 @@ async function setup(): Promise<DatabaseDriver> {
   )`).simple()
   await seedSql.unsafe(`insert into content_items (document, tags, notes)
     values ('{"status":"draft","count":1}', array['alpha','beta'], 'long note')`).simple()
+  await seedSql.unsafe(`create table binary_items (
+    id serial primary key, payload bytea
+  )`).simple()
+  await seedSql.unsafe(`insert into binary_items (payload) values (decode('000102ff', 'hex')), (null)`).simple()
   await seedSql.end()
   const driver = createPostgresDriver({
     name: 't', driver: 'postgres', host: handle.config.host, port: handle.config.port,
@@ -90,6 +94,58 @@ describe('postgres driver execute/browse', () => {
       document: { status: 'published', count: 2 },
       tags: ['gamma', 'delta'],
     }])
+    await driver.disconnect()
+  })
+
+  it('summarizes, downloads and safely updates binary cells', async () => {
+    const driver = await setup()
+    const browsed = await driver.browse('public', 'binary_items', {
+      limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: 1 }],
+    })
+    expect(browsed.columns).toEqual([
+      expect.objectContaining({ name: 'id', type: 'integer', nativeType: 'int4' }),
+      expect.objectContaining({ name: 'payload', type: 'binary', nativeType: 'bytea' }),
+    ])
+    const summary = browsed.rows[0]!.payload
+    expect(summary).toMatchObject({
+      $loupedb: 'binary', byteLength: 4, checksum: expect.stringMatching(/^[0-9a-f]{32}$/u),
+    })
+    expect(summary).not.toHaveProperty('data')
+
+    const version = browsed.rowVersions![0]!
+    const downloaded = await driver.readBinaryCell({
+      schema: 'public', table: 'binary_items', column: 'payload', identity: { id: 1 }, version,
+    })
+    expect([...downloaded.data!]).toEqual([0, 1, 2, 255])
+    const nullRow = await driver.browse('public', 'binary_items', {
+      limit: 1, offset: 0, filter: [{ column: 'id', op: '=', value: 2 }],
+    })
+    expect(nullRow.rows[0]!.payload).toBeNull()
+    await expect(driver.readBinaryCell({
+      schema: 'public', table: 'binary_items', column: 'payload', identity: { id: 2 },
+      version: nullRow.rowVersions![0]!,
+    })).resolves.toEqual({ data: null })
+
+    const updated = await driver.applyTableChanges({
+      schema: 'public',
+      table: 'binary_items',
+      changes: [{
+        kind: 'update', column: 'payload',
+        value: {
+          $loupedb: 'binary-upload', base64: 'bmV3AA==', byteLength: 4,
+          fileName: 'new.bin', mediaType: 'application/octet-stream',
+        },
+        originalValue: summary,
+        identity: { id: 1 },
+        version,
+      }],
+    })
+    expect(updated.results[0]!.row.payload).toMatchObject({ $loupedb: 'binary', byteLength: 4 })
+    const after = await driver.execute('select payload from binary_items where id = 1')
+    expect([...(after.rows[0]!.payload as Uint8Array)]).toEqual([110, 101, 119, 0])
+    await expect(driver.readBinaryCell({
+      schema: 'public', table: 'binary_items', column: 'payload', identity: { id: 1 }, version,
+    })).rejects.toMatchObject({ code: 'ROW_CHANGED' })
     await driver.disconnect()
   })
 

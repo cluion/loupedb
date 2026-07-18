@@ -17,6 +17,7 @@ const fakeDriver = (config: ConnectionConfig): DatabaseDriver => ({
   async commitTransaction() { return { status: 'idle', startedAt: null } },
   async rollbackTransaction() { return { status: 'idle', startedAt: null } },
   async browse() { return { columns: [], rows: [], executionMs: 0 } },
+  async readBinaryCell() { return { data: null } },
   async updateCell() { return { affectedRows: 1, row: {} } },
   async insertRow() { return { affectedRows: 1, row: {} } },
   async deleteRow() { return { affectedRows: 1, row: {} } },

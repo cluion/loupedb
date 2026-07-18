@@ -1,8 +1,8 @@
-import type { CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, RowDeleteInput, RowInsertInput, TableChangesInput, TransactionState } from '#shared/types'
+import type { BinaryCellReadInput, CellUpdateInput, ConnectionConfig, ConnectionStatus, BrowseOpts, RowDeleteInput, RowInsertInput, TableChangesInput, TransactionState } from '#shared/types'
 import type { DatabaseDriver } from '../../core/driver'
 import { createConnection, type PostgresHandle, type PostgresSession } from './connection'
 import { listDatabases, listSchemas, listTables, listColumns, listFunctions, describeTable } from './schema'
-import { deleteTableRow, executeUnsafe, browseTable, insertTableRow, updateTableCell, type CancellableQuery } from './query'
+import { deleteTableRow, executeUnsafe, browseTable, insertTableRow, readTableBinaryCell, updateTableCell, type CancellableQuery } from './query'
 import { cancelQuery, streamTable } from './stream'
 
 function withoutLeadingComments(source: string): string {
@@ -257,6 +257,16 @@ export function createPostgresDriver(config: ConnectionConfig): DatabaseDriver {
     async browse(schema: string, table: string, opts: BrowseOpts, queryId?: string) {
       if (!handle) throw new Error('not connected')
       return handle.run((sql) => browseTable(sql, schema, table, opts, queryId, activeQueries, oidCache))
+    },
+
+    async readBinaryCell(input: BinaryCellReadInput) {
+      const unlock = await acquireTransactionLock()
+      try {
+        if (!handle) throw new Error('not connected')
+        return await handle.run((sql) => readTableBinaryCell(sql, input))
+      } finally {
+        unlock()
+      }
     },
 
     async updateCell(input: CellUpdateInput) {

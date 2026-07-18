@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { setup, $fetch } from '@nuxt/test-utils/e2e'
+import { setup, $fetch, fetch as testFetch } from '@nuxt/test-utils/e2e'
 import postgres from 'postgres'
 import { startPgContainer, type PgTestHandle } from '../helpers/pg-container'
 import type { Envelope, QueryResult } from '#shared/types'
@@ -34,6 +34,8 @@ describe('browse API', async () => {
     )`).simple()
     await seedSql.unsafe(`insert into content_items (document, tags)
       values ('{"status":"draft"}', array['alpha','beta'])`).simple()
+    await seedSql.unsafe(`create table binary_items (id serial primary key, payload bytea)`).simple()
+    await seedSql.unsafe(`insert into binary_items (payload) values (decode('000102ff', 'hex'))`).simple()
     await seedSql.end()
 
     const created = await $fetch<Envelope<{ id: string }>>('/api/connections', {
@@ -143,6 +145,48 @@ describe('browse API', async () => {
       },
     )
     expect(updatedArray).toMatchObject({ ok: true, data: { affectedRows: 1 } })
+  })
+
+  it('summarizes binary cells, downloads bytes and applies staged uploads', async () => {
+    const browsed = await $fetch<Envelope<QueryResult>>(`/api/connections/${connId}/browse`, {
+      method: 'POST',
+      body: { schema: 'public', table: 'binary_items', opts: { limit: 1, offset: 0 } },
+    })
+    if (!browsed.ok) throw new Error('binary browse failed')
+    expect(browsed.data.rows[0]!.payload).toMatchObject({
+      $loupedb: 'binary', byteLength: 4, checksum: expect.stringMatching(/^[0-9a-f]{32}$/u),
+    })
+    const version = browsed.data.rowVersions![0]!
+    const download = await testFetch(
+      `/api/connections/${connId}/tables/public/binary_items/binary`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ column: 'payload', identity: { id: 1 }, version }),
+      },
+    )
+    expect([...new Uint8Array(await download.arrayBuffer())]).toEqual([0, 1, 2, 255])
+    expect(download.headers.get('content-disposition')).toContain('binary_items-payload.bin')
+
+    const uploaded = await $fetch<Envelope<{ affectedRows: number }>>(
+      `/api/connections/${connId}/tables/public/binary_items/changes`,
+      {
+        method: 'POST',
+        body: {
+          changes: [{
+            kind: 'update', column: 'payload',
+            value: {
+              $loupedb: 'binary-upload', base64: 'bmV3AA==', byteLength: 4,
+              fileName: 'new.bin', mediaType: 'application/octet-stream',
+            },
+            originalValue: browsed.data.rows[0]!.payload,
+            identity: { id: 1 },
+            version,
+          }],
+        },
+      },
+    )
+    expect(uploaded).toMatchObject({ ok: true, data: { affectedRows: 1 } })
   })
 
   it('PATCH /cell validates row identity and keeps primary keys read-only', async () => {
