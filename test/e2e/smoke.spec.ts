@@ -47,6 +47,39 @@ test('connect via form, browse schema tree and open a table', async ({ page }) =
   // data grid renders the table content end to end
   await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
 
+  // composite FK values navigate to the referenced table with every key part
+  await page.getByRole('button', { name: 'orders', exact: true }).click()
+  const orderGrid = page.locator('.grid').first()
+  const linkedOrder = orderGrid.getByRole('cell', { name: 'linked order', exact: true }).locator('..')
+  const customerLink = orderGrid.getByRole('button', {
+    name: '開啟 customer_id 的 FK public.customers：tenant_id = 7，id = 42',
+  })
+  await expect(customerLink).toBeVisible()
+  await expect(orderGrid.getByRole('row').filter({ hasText: 'unlinked order' })
+    .locator('.foreign-key-trigger')).toHaveCount(0)
+
+  // leaving through an FK link keeps the existing staged-change confirmation
+  await linkedOrder.getByRole('cell', { name: 'linked order', exact: true }).dblclick()
+  await page.getByRole('textbox', { name: '編輯 label 第 1 列' }).fill('pending FK navigation')
+  await page.getByRole('button', { name: '預覽寫入' }).click()
+  await page.getByRole('button', { name: '暫存更新' }).click()
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('尚有未套用的資料變更')
+    await dialog.dismiss()
+  })
+  await customerLink.click()
+  await expect(page.getByTestId('staged-changes')).toBeVisible()
+  await page.getByRole('button', { name: '全部回復' }).click()
+
+  await customerLink.click()
+  await expect(page.locator('.panel-head .eyebrow')).toContainText('public.customers')
+  await expect(page.getByTestId('active-filter')).toContainText('tenant_id = 7 AND id = 42')
+  await expect(page.getByRole('cell', { name: 'Acme customer', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'Other tenant customer', exact: true })).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'items', exact: true }).click()
+  await expect(page.getByRole('cell', { name: 'x', exact: true })).toBeVisible()
+
   // multiple filters can be combined and replayed from per-table browser history
   const filterBuilder = page.getByRole('region', { name: '多條件篩選' })
   await filterBuilder.getByLabel('filter column').selectOption('label')

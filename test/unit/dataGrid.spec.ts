@@ -256,6 +256,76 @@ describe('DataGrid', () => {
     }))
   })
 
+  it('loads a table with initial navigation filters', async () => {
+    const initialFilters = [
+      { column: 'id', op: '=' as const, value: 1 },
+      { column: 'label', op: '=' as const, value: 'a' },
+    ]
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, initialFilters },
+    })
+    await vi.waitFor(() => expect(w.find('table').exists()).toBe(true))
+
+    expect(browseMock).toHaveBeenCalledWith('public', 'items', expect.objectContaining({
+      offset: 0,
+      filterCombinator: 'and',
+      filter: initialFilters,
+    }))
+    expect((w.get('[aria-label="filter column"]').element as HTMLSelectElement).value).toBe('id')
+    expect((w.get('[aria-label="filter value"]').element as HTMLInputElement).value).toBe('1')
+    expect((w.get('[aria-label="filter column 2"]').element as HTMLSelectElement).value).toBe('label')
+    expect(w.get('[data-testid="active-filter"]').text()).toContain('id = 1 AND label = "a"')
+  })
+
+  it('emits a complete composite FK target and omits links for NULL keys', async () => {
+    const ordersResult: QueryResult = {
+      columns: [
+        { name: 'id', nativeType: 'int4', type: 'integer', nullable: false },
+        { name: 'tenant_id', nativeType: 'int4', type: 'integer', nullable: false },
+        { name: 'customer_id', nativeType: 'int4', type: 'integer', nullable: true },
+        { name: 'label', nativeType: 'text', type: 'string', nullable: false },
+      ],
+      rows: [
+        { id: 1, tenant_id: 7, customer_id: 42, label: 'linked' },
+        { id: 2, tenant_id: 7, customer_id: null, label: 'unlinked' },
+      ],
+      rowVersions: ['10', '11'],
+      executionMs: 1,
+    }
+    browseMock.mockResolvedValue({ ok: true, data: ordersResult } as never)
+    describeMock.mockResolvedValue({
+      ok: true,
+      data: {
+        schema: 'public', table: 'orders', columns: ordersResult.columns,
+        primaryKey: ['id'], uniqueKeys: [],
+        foreignKeys: [{
+          name: 'orders_customer_fk',
+          columns: ['tenant_id', 'customer_id'],
+          referencesSchema: 'public', referencesTable: 'customers',
+          referencesColumns: ['tenant_id', 'id'],
+        }],
+      },
+    })
+    const w = await mountSuspended(DataGrid, {
+      props: { ...props, table: 'orders' },
+    })
+    await vi.waitFor(() => expect(w.findAll('.foreign-key-trigger')).toHaveLength(2))
+
+    const customerLink = w.get('[aria-label="開啟 customer_id 的 FK public.customers：tenant_id = 7，id = 42"]')
+    await customerLink.trigger('click')
+    expect(w.emitted('navigate-foreign-key')).toEqual([[
+      {
+        schema: 'public', table: 'customers',
+        filters: [
+          { column: 'tenant_id', op: '=', value: 7 },
+          { column: 'id', op: '=', value: 42 },
+        ],
+      },
+    ]])
+    expect(w.find('[aria-label^="開啟 customer_id"]').text()).toContain('42')
+    expect(w.findAll('tr').find(row => row.text().includes('unlinked'))!.find('.foreign-key-trigger').exists()).toBe(false)
+  })
+
   it('selects a cell rectangle and copies spreadsheet-safe TSV', async () => {
     browseMock.mockResolvedValue(result([
       { id: 1, label: '=first' },

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { BrowseFilterCondition, ForeignKeyNavigationTarget } from '#shared/types'
 import { clearSqlWorkspacePersistence } from '../stores/sqlWorkspace'
 
 const {
@@ -12,7 +13,16 @@ const {
 const { remove } = useConnections()
 const locked = ref(false)
 // connId is the sibling session bound to the selected database
-const selected = ref<{ connId: string; database: string; schema: string; table: string } | null>(null)
+interface SelectedTable {
+  readonly connId: string
+  readonly database: string
+  readonly schema: string
+  readonly table: string
+  readonly initialFilters: ReadonlyArray<BrowseFilterCondition>
+  readonly selectionKey: number
+}
+let nextSelectionKey = 1
+const selected = ref<SelectedTable | null>(null)
 const view = ref<'data' | 'structure'>('data')
 const hasStagedChanges = ref(false)
 // sql runs against the database the user is currently looking at
@@ -61,8 +71,26 @@ function selectTable(connId: string, database: string, schema: string, table: st
   const changed = !current
     || current.connId !== connId || current.schema !== schema || current.table !== table
   if (changed && !confirmDiscardStagedChanges()) return
+  if (!changed) return
   hasStagedChanges.value = false
-  selected.value = { connId, database, schema, table }
+  selected.value = {
+    connId, database, schema, table, initialFilters: [], selectionKey: nextSelectionKey++,
+  }
+}
+
+function navigateForeignKey(target: ForeignKeyNavigationTarget) {
+  const current = selected.value
+  if (!current || !confirmDiscardStagedChanges()) return
+  hasStagedChanges.value = false
+  view.value = 'data'
+  selected.value = {
+    connId: current.connId,
+    database: current.database,
+    schema: target.schema,
+    table: target.table,
+    initialFilters: target.filters.map((filter) => ({ ...filter })),
+    selectionKey: nextSelectionKey++,
+  }
 }
 
 function selectView(next: 'data' | 'structure') {
@@ -116,12 +144,14 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
         </div>
         <template v-if="view === 'data'">
           <DataGrid
-            :key="`${selected.connId}.${selected.schema}.${selected.table}`"
+            :key="selected.selectionKey"
             :connection-id="selected.connId" :schema="selected.schema" :table="selected.table"
             :database="selected.database"
             :history-label="currentConnectionName ?? currentConnectionId"
             :safety-mode="currentConnectionSafetyMode"
+            :initial-filters="selected.initialFilters"
             @dirty-state="hasStagedChanges = $event"
+            @navigate-foreign-key="navigateForeignKey"
           />
           <StreamResult :connection-id="selected.connId" :schema="selected.schema" :table="selected.table" />
         </template>

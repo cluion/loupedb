@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## [Unreleased]
+
+### Added
+
+- **FK 資料列導覽**：DataGrid 將完整非 NULL 的 foreign key 值顯示為導覽連結；點擊後切換至被參照資料表，並以參數化的精確多條件篩選定位資料列。單欄、複合及跨 schema FK 皆使用既有 metadata，不完整 FK 維持一般文字，離開前仍保護尚未套用的 staged changes
+
 ## [0.20.0] - 2026-07-19
 
 ### Added

@@ -10,6 +10,7 @@ import {
   type CellUpdateInput,
   type ColumnInfo,
   type ConnectionSafetyMode,
+  type ForeignKeyNavigationTarget,
   type NormalizedType,
   type QueryResult,
   type RowDeleteInput,
@@ -42,8 +43,12 @@ const props = withDefaults(defineProps<{
   database?: string
   historyLabel?: string
   safetyMode?: ConnectionSafetyMode
-}>(), { database: '', historyLabel: '', safetyMode: 'normal' })
-const emit = defineEmits<{ 'dirty-state': [dirty: boolean] }>()
+  initialFilters?: ReadonlyArray<BrowseFilterCondition>
+}>(), { database: '', historyLabel: '', safetyMode: 'normal', initialFilters: () => [] })
+const emit = defineEmits<{
+  'dirty-state': [dirty: boolean]
+  'navigate-foreign-key': [target: ForeignKeyNavigationTarget]
+}>()
 const { applyTableChanges, browse, downloadBinaryCell } = useQuery(props.connectionId)
 const { describe } = useSchema(props.connectionId)
 
@@ -93,8 +98,16 @@ const createFilterCondition = (): FilterDraftCondition => ({
   id: nextFilterConditionId++, column: '', op: '=', value: '',
 })
 const filterCombinator = ref<BrowseFilterCombinator>('and')
-const filterConditions = ref<FilterDraftCondition[]>([createFilterCondition()])
-const appliedFilters = ref<ReadonlyArray<BrowseFilterCondition>>([])
+const initialFilters = props.initialFilters.slice(0, MAX_BROWSE_FILTERS).map((filter) => ({ ...filter }))
+const filterConditions = ref<FilterDraftCondition[]>(initialFilters.length
+  ? initialFilters.map((filter) => ({
+      id: nextFilterConditionId++,
+      column: filter.column,
+      op: filter.op,
+      value: filter.value === undefined || filter.value === null ? '' : String(filter.value),
+    }))
+  : [createFilterCondition()])
+const appliedFilters = ref<ReadonlyArray<BrowseFilterCondition>>(initialFilters)
 const appliedFilterCombinator = ref<BrowseFilterCombinator>('and')
 const tableScope = [
   props.historyLabel || props.connectionId,
@@ -867,6 +880,47 @@ function displayValue(value: unknown): string {
   return String(value)
 }
 
+interface ForeignKeyCellLink {
+  readonly target: ForeignKeyNavigationTarget
+}
+
+function foreignKeyLink(
+  row: Readonly<Record<string, unknown>>, column: string,
+): ForeignKeyCellLink | null {
+  const foreignKey = tableInfo.value?.foreignKeys.find((candidate) => candidate.columns.includes(column))
+  if (!foreignKey || !foreignKey.columns.length
+    || foreignKey.columns.length !== foreignKey.referencesColumns.length
+    || foreignKey.columns.length > MAX_BROWSE_FILTERS) return null
+
+  const values = foreignKey.columns.map((localColumn) => cellValue(row, localColumn))
+  if (values.some((value) => value === null || value === undefined || isBinaryCellValue(value))) return null
+
+  return {
+    target: {
+      schema: foreignKey.referencesSchema,
+      table: foreignKey.referencesTable,
+      filters: foreignKey.referencesColumns.map((referencedColumn, index) => ({
+        column: referencedColumn,
+        op: '=',
+        value: values[index],
+      })),
+    },
+  }
+}
+
+function foreignKeyLinkLabel(link: ForeignKeyCellLink | null, sourceColumn: string): string {
+  if (!link) return ''
+  const filters = link.target.filters
+    .map((filter) => `${filter.column} = ${displayValue(filter.value)}`)
+    .join('，')
+  return `開啟 ${sourceColumn} 的 FK ${link.target.schema}.${link.target.table}：${filters}`
+}
+
+function navigateForeignKey(link: ForeignKeyCellLink | null) {
+  if (!link) return
+  emit('navigate-foreign-key', link.target)
+}
+
 function usesExpandedCell(column: ColumnInfo, value: unknown): boolean {
   return column.type === 'binary' || usesCellContentDialog(column.type, value)
 }
@@ -1440,6 +1494,20 @@ async function applyAll() {
                 <span>{{ displayValue(cellValue(row, c.name)) }}</span>
                 <span aria-hidden="true">↗</span>
               </button>
+              <button
+                v-else-if="foreignKeyLink(row, c.name)"
+                type="button"
+                class="foreign-key-trigger"
+                :aria-label="foreignKeyLinkLabel(foreignKeyLink(row, c.name), c.name)"
+                :title="foreignKeyLinkLabel(foreignKeyLink(row, c.name), c.name)"
+                @pointerdown.stop
+                @click.stop="navigateForeignKey(foreignKeyLink(row, c.name))"
+                @dblclick.stop
+                @keydown.stop
+              >
+                <span>{{ displayValue(cellValue(row, c.name)) }}</span>
+                <span aria-hidden="true">↗</span>
+              </button>
               <template v-else>{{ displayValue(cellValue(row, c.name)) }}</template>
             </td>
             <td class="row-actions">
@@ -1751,6 +1819,20 @@ tbody td:not(.row-actions) { user-select: none; }
 .cell-content-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; }
 .cell-content-trigger span:last-child { color: var(--brass); font-size: 10px; }
 .cell-content-trigger:hover { border: 0; background: transparent; color: var(--brass); }
+.foreign-key-trigger {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--glass);
+  font: inherit;
+}
+.foreign-key-trigger span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.foreign-key-trigger span:last-child { color: var(--brass); font-size: 10px; }
+.foreign-key-trigger:hover { border: 0; background: transparent; color: var(--brass); }
 .row-actions { display: flex; gap: 4px; overflow: visible; max-width: none; }
 .delete-row { color: var(--danger); }
 .dirty-badge { color: var(--brass); font: 10px var(--font-data); letter-spacing: 0.08em; }

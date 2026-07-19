@@ -30,6 +30,26 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   )`).simple()
   await sql.unsafe(`insert into binary_items (payload)
     values (decode('004c6f757065ff', 'hex'))`).simple()
+  await sql.unsafe(`create table customers (
+    tenant_id integer not null,
+    id integer not null,
+    name text not null,
+    primary key (tenant_id, id)
+  )`).simple()
+  await sql.unsafe(`insert into customers values
+    (7, 42, 'Acme customer'),
+    (8, 42, 'Other tenant customer')`).simple()
+  await sql.unsafe(`create table orders (
+    id serial primary key,
+    tenant_id integer not null,
+    customer_id integer,
+    label text not null,
+    constraint orders_customer_fk foreign key (tenant_id, customer_id)
+      references customers (tenant_id, id)
+  )`).simple()
+  await sql.unsafe(`insert into orders (tenant_id, customer_id, label) values
+    (7, 42, 'linked order'),
+    (7, null, 'unlinked order')`).simple()
   await sql.unsafe(`create function double_value(value integer)
     returns integer language sql immutable as $$ select value * 2 $$`).simple()
   await sql.end()

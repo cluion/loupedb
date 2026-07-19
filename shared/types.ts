@@ -139,6 +139,12 @@ export interface BrowseFilterCondition {
   readonly value?: unknown
 }
 
+export interface ForeignKeyNavigationTarget {
+  readonly schema: string
+  readonly table: string
+  readonly filters: ReadonlyArray<BrowseFilterCondition>
+}
+
 export interface BrowseOpts {
   readonly limit: number
   readonly offset: number
